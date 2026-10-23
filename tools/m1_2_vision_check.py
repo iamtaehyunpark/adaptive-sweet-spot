@@ -89,23 +89,24 @@ class Stats:
 
 
 def frames_from_camera(args, vcfg):
-    from vision.camera import FrameGrabber
+    from vision.camera import Camera
 
-    grabber = FrameGrabber(args.camera if args.camera is not None else vcfg["camera_index"],
-                           args.width or vcfg["width"], args.height or vcfg["height"],
-                           args.fps or vcfg["fps"])
-    print(f"camera: {grabber.width}x{grabber.height} @ {grabber.reported_fps:.1f} fps (reported)")
+    cam = Camera(args.camera if args.camera is not None else vcfg["camera_index"],
+                 args.width or vcfg["width"], args.height or vcfg["height"],
+                 args.fps or vcfg["fps"])
+    print(f"camera: {cam.width}x{cam.height} @ {cam.reported_fps:.1f} fps (reported)")
     try:
         seq = 0
         while True:
-            item = grabber.read(seq)
+            item = cam.read()
             if item is None:
-                print("camera timeout", file=sys.stderr)
+                print("camera read failed", file=sys.stderr)
                 return
-            seq, ts, frame = item
+            seq += 1
+            ts, frame = item
             yield seq, ts, frame
     finally:
-        grabber.close()
+        cam.close()
 
 
 def frames_from_video(path: str):
