@@ -1,0 +1,82 @@
+# Default system configuration. Copy to config/local.toml to override per setup.
+# Room frame: meters, origin = designated center, +x right, +y front, +z up.
+# Azimuth: degrees clockwise from front (+y).
+
+[audio]
+sample_rate = 48000
+block_size = 128          # 2.67 ms @ 48 kHz
+channels = 6
+device = ""               # substring of output device name; "" = system default
+speed_of_sound = 343.0    # m/s
+
+# Logitech Z906, ITU-R BS.775-style placement (measure and replace).
+[[speakers]]
+name = "FL"
+channel = 0
+azimuth_deg = -30
+distance_m = 2.0
+height_m = 0.0
+trim_db = 0.0
+
+[[speakers]]
+name = "FR"
+channel = 1
+azimuth_deg = 30
+distance_m = 2.0
+height_m = 0.0
+trim_db = 0.0
+
+[[speakers]]
+name = "FC"
+channel = 2
+azimuth_deg = 0
+distance_m = 2.0
+height_m = 0.0
+trim_db = 0.0
+
+[[speakers]]
+name = "LFE"
+channel = 3
+azimuth_deg = 20
+distance_m = 2.2
+height_m = -0.8
+trim_db = 0.0
+lfe = true
+
+[[speakers]]
+name = "SL"
+channel = 4
+azimuth_deg = -110
+distance_m = 1.8
+height_m = 0.0
+trim_db = 0.0
+
+[[speakers]]
+name = "SR"
+channel = 5
+azimuth_deg = 110
+distance_m = 1.8
+height_m = 0.0
+trim_db = 0.0
+
+[listener]
+default_position = [0.0, 0.0, 0.0]
+max_offset_m = 1.5
+
+[vision]
+camera_index = 0
+width = 1280
+height = 720
+fps = 60
+hfov_deg = 70.0
+model_path = "assets/models/blaze_face_short_range.tflite"
+min_confidence = 0.5
+
+[vision.camera_pose]      # camera mounted at front center, facing the listener
+position = [0.0, 2.0, 0.3]
+yaw_deg = 180.0
+pitch_deg = 0.0
+
+[bridge]
+udp_host = "127.0.0.1"
+udp_port = 9750
