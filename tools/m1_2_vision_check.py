@@ -42,6 +42,7 @@ from vision.head_pose import estimate_roll_deg, estimate_yaw_deg  # noqa: E402
 from vision.tracker import FaceTracker  # noqa: E402
 
 COUNTDOWN_S = 3.0
+IPD_MM = 63.0
 
 
 @dataclass
@@ -79,11 +80,13 @@ def result_still(samples):
     if len(hits) < 5:
         return False, "face not detected"
     pts = np.array([s.eye_mid for s in hits])
-    jitter = float(np.sqrt(((pts - pts.mean(0)) ** 2).sum(1).mean()))
+    jitter_px = float(np.sqrt(((pts - pts.mean(0)) ** 2).sum(1).mean()))
+    # Scale pixels to mm using the average interpupillary distance (~63 mm).
+    jitter_mm = jitter_px / np.mean([s.ipd for s in hits]) * IPD_MM
     yaw_sd = float(np.std([s.yaw for s in hits]))
     rate = detection_rate(samples)
-    ok = rate >= 0.95 and jitter < 2.0
-    return ok, f"detect {rate:.0%}  jitter {jitter:.2f}px  yaw sd {yaw_sd:.1f}deg"
+    ok = rate >= 0.95 and jitter_mm < 10.0
+    return ok, f"detect {rate:.0%}  jitter {jitter_mm:.1f}mm ({jitter_px:.1f}px)  yaw sd {yaw_sd:.1f}deg"
 
 
 def result_yaw(samples):

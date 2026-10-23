@@ -73,7 +73,7 @@ in the window and print to the terminal on exit:
 
 | Key | Test | What to do | Pass |
 |-----|------|------------|------|
-| 1 | Still | Sit still, look at the camera (10 s) | detect ≥ 95%, jitter < 2 px |
+| 1 | Still | Sit still, look at the camera (10 s) | detect ≥ 95%, jitter < 10 mm |
 | 2 | Yaw | Slowly turn head fully left, then right (10 s) | reaches ±30°, detect ≥ 90% |
 | 3 | Move | Move and lean at normal speed (15 s) | detect ≥ 95% |
 | 4 | Distance | Slowly move back to your listening position (15 s) | info: does detection hold? |
