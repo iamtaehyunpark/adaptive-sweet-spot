@@ -22,7 +22,9 @@ def draw_face(frame: np.ndarray, face: FaceObservation, primary: bool = True) ->
 def draw_hud(frame: np.ndarray, lines: list[str]) -> None:
     import cv2
 
+    font, scale, line_h, pad = cv2.FONT_HERSHEY_SIMPLEX, 0.55, 20, 8
+    width = max((cv2.getTextSize(t, font, scale, 1)[0][0] for t in lines), default=0)
+    cv2.rectangle(frame, (10 - pad, 10 - pad), (10 + width + pad, 10 + line_h * len(lines) + pad // 2),
+                  (255, 255, 255), -1)
     for i, text in enumerate(lines):
-        org = (10, 22 + 20 * i)
-        cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
-        cv2.putText(frame, text, org, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        cv2.putText(frame, text, (10, 25 + line_h * i), font, scale, (0, 0, 0), 1, cv2.LINE_AA)
