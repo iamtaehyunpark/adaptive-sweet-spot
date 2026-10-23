@@ -73,6 +73,9 @@ model_path = "assets/models/blaze_face_full_range.tflite"   # or blaze_face_shor
 min_confidence = 0.5
 roi_scale = 4.0             # tracking crop = roi_scale x face width
 search_levels = [1, 2, 3]   # when no face: full frame, then 2x2, then 3x3 tiles
+adaptive_rate = true        # detect only as often as head motion needs (vision/rate.py)
+tolerance_mm = 30.0         # allowed position error (~0.1 ms L/R arrival error)
+min_fps = 5.0               # detection rate floor when the head is still
 
 [vision.camera_pose]      # camera mounted at front center, facing the listener
 position = [0.0, 2.0, 0.3]

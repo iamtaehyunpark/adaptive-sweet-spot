@@ -98,6 +98,19 @@ Synthetic check (1280×720, 70° HFOV, Mac CPU):
 | `blaze_face_full_range` (default) | ~2 m | ~4 m | ~4.6 ms |
 | `blaze_face_short_range` | ~0.9 m | ~1.5 m | ~1.6 ms |
 
+Detection rate (`vision/rate.py`): the camera runs at 30 fps but the detector
+only runs as often as head motion needs — `fps = head speed / (tolerance / 2)`,
+with `tolerance_mm = 30` (~0.1 ms L/R arrival error). Still head → 5 fps,
+0.3 m/s → 20 fps, ≥ 0.5 m/s → every frame. Skipped frames get a cheap motion
+check (32×32 thumbnail of the face region) so a sudden move is caught at once.
+
+Compute (counted from the model graphs):
+
+| Model | Input | MACs | GFLOPs / inference | at 30 fps |
+|-------|-------|------|--------------------|-----------|
+| `blaze_face_short_range` | 128×128 | 31 M | 0.06 | 1.9 GFLOPS |
+| `blaze_face_full_range` | 192×192 | 106 M | 0.21 | 6.3 GFLOPS |
+
 Known limits:
 - Ear keypoints become unreliable beyond roughly ±50° yaw.
 - Searching (no face yet) can cost several inferences per frame.

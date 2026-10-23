@@ -39,7 +39,8 @@ sys.path.insert(0, str(ROOT))
 from config import load_config  # noqa: E402
 from vision.detector import KEYPOINT_NAMES, BlazeFaceDetector  # noqa: E402
 from vision.head_pose import estimate_roll_deg, estimate_yaw_deg  # noqa: E402
-from vision.tracker import FaceTracker  # noqa: E402
+from vision.rate import AdaptiveRate  # noqa: E402
+from vision.tracker import FaceTracker, roi_around  # noqa: E402
 
 COUNTDOWN_S = 3.0
 IPD_MM = 63.0
@@ -258,6 +259,11 @@ def main() -> int:
 
     with BlazeFaceDetector(ROOT / vcfg["model_path"], vcfg["min_confidence"]) as det:
         tracker = FaceTracker(det, vcfg["roi_scale"], tuple(vcfg["search_levels"]))
+        rate = None
+        if vcfg["adaptive_rate"]:
+            rate = AdaptiveRate(vcfg["tolerance_mm"], vcfg["min_fps"], max_fps=args.fps or vcfg["fps"])
+        det_times: list[float] = []
+        latency = 0.0
         while True:
             item = source.read()
             if item is None:
@@ -273,15 +279,26 @@ def main() -> int:
                 if key == ord("c"):
                     source.switch()
                     tracker.reset()
+                    det_times = []
+                    if rate is not None:
+                        rate.reset()
                     frame_times, active = [], None
                 continue
 
             ts, frame = item
-            face = tracker.update(frame, ts)
-            faces = [face] if face is not None else []
-            latency = (time.perf_counter() - ts) * 1000.0
             frame_times = (frame_times + [ts])[-60:]
-            latencies.append(latency)
+            # Adaptive rate: skip detection when the head is moving slowly enough.
+            processed = rate is None or rate.should_process(ts, frame)
+            if processed:
+                face = tracker.update(frame, ts)
+                if rate is not None:
+                    rate.update(face, ts, frame, roi_around(face, tracker.roi_scale) if face else None)
+                latency = (time.perf_counter() - ts) * 1000.0
+                latencies.append(latency)
+                det_times = (det_times + [ts])[-30:]
+            else:
+                face = tracker.last
+            faces = [face] if face is not None else []
 
             sample = Sample(ts, face is not None)
             if face is not None:
@@ -297,7 +314,8 @@ def main() -> int:
                 if elapsed < COUNTDOWN_S:
                     status = f"[{active.name}] {active.instruction} - starting in {COUNTDOWN_S - elapsed:.0f}"
                 elif elapsed < COUNTDOWN_S + active.duration_s:
-                    active.samples.append(sample)
+                    if processed:
+                        active.samples.append(sample)
                     left = COUNTDOWN_S + active.duration_s - elapsed
                     status = f"[{active.name}] RECORDING {left:4.1f}s - {active.instruction}"
                 else:
@@ -305,7 +323,7 @@ def main() -> int:
                     print(f"{active.name:9s} {verdict(active.passed):5s} {active.result}")
                     active = None
 
-            if writer:
+            if writer and processed:
                 row = [f"{ts:.4f}", active.name if active else "", f"{tracker.infer_ms:.3f}",
                        f"{latency:.3f}", len(faces)]
                 if face is not None:
@@ -314,10 +332,14 @@ def main() -> int:
                             f"{face.ipd_px:.1f}", f"{sample.yaw:.1f}", f"{sample.roll:.1f}"]
                 writer.writerow(row)
 
-            fps = (len(frame_times) - 1) / (frame_times[-1] - frame_times[0]) if len(frame_times) > 1 else 0.0
+            fps = rate_of(frame_times)
+            det_line = f"detect {rate_of(det_times):4.1f} fps"
+            if rate is not None:
+                det_line += (f" (target {rate.target_fps:4.1f}, head {rate.speed_mm_s:4.0f} mm/s, "
+                             f"motion {rate.motion:4.1f})")
             hud = [source.label,
-                   f"fps {fps:4.1f}  infer {tracker.infer_ms:4.1f}ms  latency {latency:4.1f}ms  "
-                   f"{tracker.mode} ({tracker.inferences} run{'s' if tracker.inferences != 1 else ''})"]
+                   f"camera {fps:4.1f} fps  infer {tracker.infer_ms:4.1f}ms  latency {latency:4.1f}ms  "
+                   f"{tracker.mode} ({tracker.inferences} run{'s' if tracker.inferences != 1 else ''})", det_line]
             if face is not None:
                 hud.append(f"yaw {sample.yaw:+5.1f}  roll {sample.roll:+5.1f}  ipd {face.ipd_px:4.0f}px  "
                            f"score {face.score:.2f}")
@@ -340,6 +362,9 @@ def main() -> int:
             if key == ord("c"):
                 source.switch()
                 tracker.reset()
+                det_times = []
+                if rate is not None:
+                    rate.reset()
                 frame_times, active = [], None  # a test can't span two cameras
                 continue
             if key in TESTS and active is None:
@@ -359,6 +384,10 @@ def main() -> int:
         lat = np.array(latencies)
         print(f"latency   p50 {np.percentile(lat, 50):.1f}ms  p95 {np.percentile(lat, 95):.1f}ms")
     return 0
+
+
+def rate_of(times: list[float]) -> float:
+    return (len(times) - 1) / (times[-1] - times[0]) if len(times) > 1 and times[-1] > times[0] else 0.0
 
 
 def verdict(passed: bool | None) -> str:
