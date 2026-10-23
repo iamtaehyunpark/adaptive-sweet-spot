@@ -159,11 +159,12 @@ def main() -> int:
                          "ipd_px", "yaw_deg", "roll_deg"])
 
     source = frames_from_video(args.video) if args.video else frames_from_camera(args, vcfg)
-    t_start = time.perf_counter()
-    last_print = t_start
+    t_start = last_print = None
     try:
         with BlazeFaceDetector(model, vcfg["min_confidence"]) as det:
             for seq, ts, frame in source:
+                if t_start is None:  # start the clock at the first frame, not camera open
+                    t_start = last_print = ts
                 faces = det.detect(frame, ts)
                 latency = (time.perf_counter() - ts) * 1000.0
                 face = primary_face(faces)
