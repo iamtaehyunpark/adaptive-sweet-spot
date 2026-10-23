@@ -68,7 +68,8 @@ camera_index = 0
 width = 1280
 height = 720
 fps = 30
-hfov_deg = 70.0
+hfov_deg = 70.0            # only used before calibration (tools/m2_2_spatial_check.py, key k)
+ipd_m = 0.063              # listener interpupillary distance; set your own for best lateral accuracy
 model_path = "assets/models/blaze_face_full_range.tflite"   # or blaze_face_short_range.tflite
 min_confidence = 0.5
 roi_scale = 4.0             # tracking crop = roi_scale x face width
@@ -77,10 +78,7 @@ adaptive_rate = true        # detect only as often as head motion needs (vision/
 tolerance_mm = 30.0         # allowed position error (~0.1 ms L/R arrival error)
 min_fps = 5.0               # detection rate floor when the head is still
 
-[vision.camera_pose]      # camera mounted at front center, facing the listener
-position = [0.0, 2.0, 0.3]
-yaw_deg = 180.0
-pitch_deg = 0.0
+# Milestone 2.2 assumes the camera sits on top of the FC speaker, level, facing the listener.
 
 [bridge]
 udp_host = "127.0.0.1"

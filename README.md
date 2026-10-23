@@ -39,7 +39,7 @@ stays centered as the listener moves.
 | 1 | 1.1 | Static audio centering (6-ch playback, fixed speaker layout) | ☐ |
 | 1 | 1.2 | BlazeFace validation on webcam feed | ◐ tooling done, live validation pending |
 | 2 | 2.1 | DSP sweet-spot shifting via delays + levels | ☐ |
-| 2 | 2.2 | BlazeFace detections → real-world offsets | ☐ |
+| 2 | 2.2 | BlazeFace detections → real-world offsets | ◐ tooling done, live validation pending |
 | 3 | 3.1 | Manual re-centering interface | ☐ |
 | 3 | 3.2 | Vision → interface live pipeline | ☐ |
 | 4 | 4.1 | QIDK deployment, end-to-end latency < 25 ms | ☐ |
@@ -115,3 +115,35 @@ Known limits:
 - Ear keypoints become unreliable beyond roughly ±50° yaw.
 - Searching (no face yet) can cost several inferences per frame.
 - Default capture is 30 fps; the frame interval adds up to 33 ms of delay.
+
+## Milestone 2.2 — Listener offset from the center
+
+Assumes the camera sits **on top of the front center (FC) speaker**, level, facing
+the listener. The designated center is then straight ahead of the camera at the
+FC distance `D` (from `config/default.toml`). Output is the top-down offset
+`(x, y)` in meters (`vision/spatial.py`):
+
+```
+distance  Z = scale · f · IPD / ipd_px      (eye spacing → distance)
+lateral   x = −(u − cx) · IPD / ipd_px − x_bias   (eye spacing as a ruler; image right = room left)
+front     y = D − Z                         (+ = toward the front speakers)
+```
+
+```bash
+python tools/m2_2_spatial_check.py
+```
+
+| Key | Action |
+|-----|--------|
+| `k` | Calibrate: sit at the intended center, look at the camera, press `k` (1.5 s capture) |
+| space | Record your averaged position, to compare with a tape measure |
+| `c` / `q` | Switch camera / quit |
+
+Calibration sets `scale` (fixes distance for the real camera FOV and your real IPD)
+and `x_bias` (camera not exactly on the center line); it is saved to
+`config/calibration.json`. Lateral `x` does not depend on the FOV, only on your real
+IPD — set `vision.ipd_m` to your own value for best accuracy (63 mm default can be ~8% off).
+
+Known limits: head turns shrink the apparent eye spacing, so distance reads too
+far while the head is turned; height and the eye→ear offset are ignored.
+
