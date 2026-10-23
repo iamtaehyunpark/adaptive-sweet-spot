@@ -84,8 +84,21 @@ Head angles are geometric estimates from the keypoints (`vision/head_pose.py`):
 yaw from the nose offset relative to the ear midpoint, roll from the eye line.
 Image-space signs: yaw > 0 when the nose moves toward image right.
 
+Distance: BlazeFace only sees a 128/192 px copy of its input, so faces far away
+are too small in a full frame. `vision/tracker.py` handles this with two simple steps:
+
+- **track** — face found last frame → detect only in a crop `roi_scale` × the face
+  width around it (one inference per frame).
+- **search** — no face → full frame, then 2×2, then 3×3 overlapping tiles.
+
+Synthetic check (1280×720, 70° HFOV, Mac CPU):
+
+| Model | Full frame only | With tracker (acquire) | Tracking cost |
+|-------|-----------------|------------------------|---------------|
+| `blaze_face_full_range` (default) | ~2 m | ~4 m | ~4.6 ms |
+| `blaze_face_short_range` | ~0.9 m | ~1.5 m | ~1.6 ms |
+
 Known limits:
-- `blaze_face_short_range` is tuned for faces within ~2 m of the camera.
 - Ear keypoints become unreliable beyond roughly ±50° yaw.
-- A 30 fps camera alone adds up to 33 ms between frames; the 25 ms budget needs
-  a ≥60 fps camera and/or prediction (Milestone 3.2).
+- Searching (no face yet) can cost several inferences per frame.
+- Default capture is 30 fps; the frame interval adds up to 33 ms of delay.

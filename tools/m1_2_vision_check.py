@@ -37,8 +37,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from config import load_config  # noqa: E402
-from vision.detector import KEYPOINT_NAMES, BlazeFaceDetector, primary_face  # noqa: E402
+from vision.detector import KEYPOINT_NAMES, BlazeFaceDetector  # noqa: E402
 from vision.head_pose import estimate_roll_deg, estimate_yaw_deg  # noqa: E402
+from vision.tracker import FaceTracker  # noqa: E402
 
 COUNTDOWN_S = 3.0
 
@@ -253,6 +254,7 @@ def main() -> int:
     active_start = 0.0
 
     with BlazeFaceDetector(ROOT / vcfg["model_path"], vcfg["min_confidence"]) as det:
+        tracker = FaceTracker(det, vcfg["roi_scale"], tuple(vcfg["search_levels"]))
         while True:
             item = source.read()
             if item is None:
@@ -267,13 +269,14 @@ def main() -> int:
                     break
                 if key == ord("c"):
                     source.switch()
+                    tracker.reset()
                     frame_times, active = [], None
                 continue
 
             ts, frame = item
-            faces = det.detect(frame, ts)
+            face = tracker.update(frame, ts)
+            faces = [face] if face is not None else []
             latency = (time.perf_counter() - ts) * 1000.0
-            face = primary_face(faces)
             frame_times = (frame_times + [ts])[-60:]
             latencies.append(latency)
 
@@ -300,7 +303,7 @@ def main() -> int:
                     active = None
 
             if writer:
-                row = [f"{ts:.4f}", active.name if active else "", f"{det.last_infer_ms:.3f}",
+                row = [f"{ts:.4f}", active.name if active else "", f"{tracker.infer_ms:.3f}",
                        f"{latency:.3f}", len(faces)]
                 if face is not None:
                     row += [f"{face.score:.3f}", *np.round(face.bbox, 1),
@@ -310,7 +313,8 @@ def main() -> int:
 
             fps = (len(frame_times) - 1) / (frame_times[-1] - frame_times[0]) if len(frame_times) > 1 else 0.0
             hud = [source.label,
-                   f"fps {fps:4.1f}  infer {det.last_infer_ms:4.1f}ms  latency {latency:4.1f}ms  faces {len(faces)}"]
+                   f"fps {fps:4.1f}  infer {tracker.infer_ms:4.1f}ms  latency {latency:4.1f}ms  "
+                   f"{tracker.mode} ({tracker.inferences} run{'s' if tracker.inferences != 1 else ''})"]
             if face is not None:
                 hud.append(f"yaw {sample.yaw:+5.1f}  roll {sample.roll:+5.1f}  ipd {face.ipd_px:4.0f}px  "
                            f"score {face.score:.2f}")
@@ -320,8 +324,10 @@ def main() -> int:
             hud += [f"{k - ord('0')} {t.name:9s} {verdict(t.passed) if t.result else '-':5s} {t.result}"
                     for k, t in TESTS.items()]
 
-            for f in faces:
-                draw_face(frame, f, primary=f is face)
+            for x0, y0, x1, y1 in tracker.regions:
+                cv2.rectangle(frame, (x0, y0), (x1, y1), (0, 200, 255), 1)
+            if face is not None:
+                draw_face(frame, face)
             draw_hud(frame, hud)
             cv2.imshow(WINDOW, frame)
 
@@ -330,6 +336,7 @@ def main() -> int:
                 break
             if key == ord("c"):
                 source.switch()
+                tracker.reset()
                 frame_times, active = [], None  # a test can't span two cameras
                 continue
             if key in TESTS and active is None:

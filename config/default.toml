@@ -67,10 +67,12 @@ max_offset_m = 1.5
 camera_index = 0
 width = 1280
 height = 720
-fps = 60
+fps = 30
 hfov_deg = 70.0
-model_path = "assets/models/blaze_face_short_range.tflite"
+model_path = "assets/models/blaze_face_full_range.tflite"   # or blaze_face_short_range.tflite
 min_confidence = 0.5
+roi_scale = 4.0             # tracking crop = roi_scale x face width
+search_levels = [1, 2, 3]   # when no face: full frame, then 2x2, then 3x3 tiles
 
 [vision.camera_pose]      # camera mounted at front center, facing the listener
 position = [0.0, 2.0, 0.3]

@@ -12,6 +12,10 @@ MODELS = {
         "https://storage.googleapis.com/mediapipe-models/face_detector/"
         "blaze_face_short_range/float16/latest/blaze_face_short_range.tflite"
     ),
+    "blaze_face_full_range.tflite": (
+        "https://storage.googleapis.com/mediapipe-models/face_detector/"
+        "blaze_face_full_range/float16/latest/blaze_face_full_range.tflite"
+    ),
 }
 
 
