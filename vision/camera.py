@@ -3,8 +3,41 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+
+@dataclass
+class CameraInfo:
+    index: int
+    name: str
+    width: int
+    height: int
+
+
+def _device_name(index: int) -> str:
+    # Linux exposes V4L2 device names in sysfs; elsewhere fall back to the index.
+    sysfs = Path(f"/sys/class/video4linux/video{index}/name")
+    if sysfs.exists():
+        return sysfs.read_text().strip()
+    return f"camera {index}"
+
+
+def list_cameras(max_index: int = 6) -> list[CameraInfo]:
+    """Probe camera indices 0..max_index-1 and return the ones that deliver frames."""
+    import cv2
+
+    found = []
+    for i in range(max_index):
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
+            ok, frame = cap.read()
+            if ok:
+                found.append(CameraInfo(i, _device_name(i), frame.shape[1], frame.shape[0]))
+        cap.release()
+    return found
 
 
 class Camera:

@@ -61,7 +61,12 @@ python tools/fetch_model.py        # BlazeFace weights -> assets/models/
 ```bash
 python tools/m1_2_vision_check.py              # test window
 python tools/m1_2_vision_check.py --log m12.csv
+python tools/m1_2_vision_check.py --list-cameras   # show connected cameras
+python tools/m1_2_vision_check.py --camera 1       # start on a specific camera
 ```
+
+All connected cameras are detected at startup; press `c` in the window to switch
+between them (index 0 is usually the built-in camera).
 
 Press a key to run a guided test (3 s countdown, then recording); results show
 in the window and print to the terminal on exit:

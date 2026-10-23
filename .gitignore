@@ -11,3 +11,6 @@ dist/
 assets/models/*.tflite
 assets/audio/*.wav
 assets/audio/*.flac
+
+# Test logs
+*.csv
