@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Milestone 1.2: validate BlazeFace face position and head angle in real time.
+"""Milestone 1.2: BlazeFace test interface.
 
-Shows the webcam feed with the face box, 6 keypoints and live stats, and
-optionally logs every frame to CSV for offline analysis.
+Opens a window with the live webcam feed, face box, 6 keypoints and stats.
+Press a number key to run a guided test; results appear in the window and
+are printed to the terminal.
 
-    python tools/m1_2_vision_check.py                    # live window
-    python tools/m1_2_vision_check.py --log run.csv      # + per-frame log
+    python tools/m1_2_vision_check.py
+    python tools/m1_2_vision_check.py --log m12.csv      # also log every frame
     python tools/m1_2_vision_check.py --video clip.mp4   # recorded input
-    python tools/m1_2_vision_check.py --no-window --duration 10
 
-Keys: q quit, r reset stats.
+Keys:
+    1  Still     sit still and look at the camera
+    2  Yaw       slowly turn your head fully left, then right
+    3  Move      move and lean around at normal speed
+    4  Distance  slowly lean/walk back to your listening position
+    q  quit
 
-Note: "latency" here is frame-grabbed -> detection-ready. It excludes sensor
-exposure and USB transfer, which must be measured externally (e.g. LED test).
+"latency" = frame read -> detection ready (excludes sensor/USB delay).
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import argparse
 import csv
 import sys
 import time
-from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -33,62 +37,97 @@ from config import load_config  # noqa: E402
 from vision.detector import KEYPOINT_NAMES, BlazeFaceDetector, primary_face  # noqa: E402
 from vision.head_pose import estimate_roll_deg, estimate_yaw_deg  # noqa: E402
 
-
-class Stats:
-    def __init__(self, window: int = 120):
-        self.window = window
-        self.reset()
-
-    def reset(self) -> None:
-        w = self.window
-        self.frame_ts = deque(maxlen=w)
-        self.infer_ms = deque(maxlen=w)
-        self.latency_ms = deque(maxlen=w)
-        self.detected = deque(maxlen=w)
-        self.eye_mid = deque(maxlen=30)
-        self.total = 0
-        self.total_detected = 0
-        self.all_infer = []
-        self.all_latency = []
-
-    def add(self, ts: float, infer: float, latency: float, face) -> None:
-        self.frame_ts.append(ts)
-        self.infer_ms.append(infer)
-        self.latency_ms.append(latency)
-        self.detected.append(face is not None)
-        self.total += 1
-        self.all_infer.append(infer)
-        self.all_latency.append(latency)
-        if face is not None:
-            self.total_detected += 1
-            self.eye_mid.append(face.eye_mid)
-
-    @property
-    def fps(self) -> float:
-        if len(self.frame_ts) < 2:
-            return 0.0
-        return (len(self.frame_ts) - 1) / (self.frame_ts[-1] - self.frame_ts[0])
-
-    @property
-    def jitter_px(self) -> float:
-        """RMS deviation of the eye midpoint over the last 30 detections (hold still to read)."""
-        if len(self.eye_mid) < 5:
-            return float("nan")
-        pts = np.array(self.eye_mid)
-        return float(np.sqrt(((pts - pts.mean(0)) ** 2).sum(1).mean()))
-
-    def summary(self) -> str:
-        if not self.total:
-            return "no frames processed"
-        inf, lat = np.array(self.all_infer), np.array(self.all_latency)
-        return (
-            f"frames={self.total}  detection_rate={self.total_detected / self.total:.1%}\n"
-            f"infer_ms    p50={np.percentile(inf, 50):.2f}  p95={np.percentile(inf, 95):.2f}  max={inf.max():.2f}\n"
-            f"latency_ms  p50={np.percentile(lat, 50):.2f}  p95={np.percentile(lat, 95):.2f}  max={lat.max():.2f}"
-        )
+COUNTDOWN_S = 3.0
 
 
-def frames_from_camera(args, vcfg):
+@dataclass
+class Sample:
+    ts: float
+    found: bool
+    eye_mid: np.ndarray | None = None
+    yaw: float = float("nan")
+    roll: float = float("nan")
+    ipd: float = float("nan")
+
+
+def detection_rate(samples):
+    return sum(s.found for s in samples) / max(len(samples), 1)
+
+
+def longest_dropout_ms(samples):
+    longest, start = 0.0, None
+    for s in samples:
+        if not s.found and start is None:
+            start = s.ts
+        elif s.found and start is not None:
+            longest, start = max(longest, s.ts - start), None
+    if start is not None:
+        longest = max(longest, samples[-1].ts - start)
+    return longest * 1000.0
+
+
+def found(samples):
+    return [s for s in samples if s.found]
+
+
+def result_still(samples):
+    hits = found(samples)
+    if len(hits) < 5:
+        return False, "face not detected"
+    pts = np.array([s.eye_mid for s in hits])
+    jitter = float(np.sqrt(((pts - pts.mean(0)) ** 2).sum(1).mean()))
+    yaw_sd = float(np.std([s.yaw for s in hits]))
+    rate = detection_rate(samples)
+    ok = rate >= 0.95 and jitter < 2.0
+    return ok, f"detect {rate:.0%}  jitter {jitter:.2f}px  yaw sd {yaw_sd:.1f}deg"
+
+
+def result_yaw(samples):
+    hits = found(samples)
+    if len(hits) < 5:
+        return False, "face not detected"
+    yaws = [s.yaw for s in hits]
+    rate = detection_rate(samples)
+    ok = rate >= 0.90 and min(yaws) <= -30 and max(yaws) >= 30
+    return ok, f"yaw {min(yaws):+.0f}..{max(yaws):+.0f}deg  detect {rate:.0%}"
+
+
+def result_move(samples):
+    rate = detection_rate(samples)
+    drop = longest_dropout_ms(samples)
+    return rate >= 0.95, f"detect {rate:.0%}  longest dropout {drop:.0f}ms"
+
+
+def result_distance(samples):
+    hits = found(samples)
+    if not hits:
+        return False, "face not detected"
+    ipds = [s.ipd for s in hits]
+    # Pass/fail is judged by you: did detection hold at your listening position?
+    return None, (f"detect {detection_rate(samples):.0%}  ipd {max(ipds):.0f}->{min(ipds):.0f}px  "
+                  f"last face ipd {hits[-1].ipd:.0f}px")
+
+
+@dataclass
+class Test:
+    name: str
+    instruction: str
+    duration_s: float
+    evaluate: callable
+    result: str = ""
+    passed: bool | None = None
+    samples: list = field(default_factory=list)
+
+
+TESTS = {
+    ord("1"): Test("Still", "Sit still, look at the camera", 10, result_still),
+    ord("2"): Test("Yaw", "Slowly turn head fully left, then right", 10, result_yaw),
+    ord("3"): Test("Move", "Move and lean around at normal speed", 15, result_move),
+    ord("4"): Test("Distance", "Slowly move back to your listening position", 15, result_distance),
+}
+
+
+def camera_frames(args, vcfg):
     from vision.camera import Camera
 
     cam = Camera(args.camera if args.camera is not None else vcfg["camera_index"],
@@ -96,128 +135,140 @@ def frames_from_camera(args, vcfg):
                  args.fps or vcfg["fps"])
     print(f"camera: {cam.width}x{cam.height} @ {cam.reported_fps:.1f} fps (reported)")
     try:
-        seq = 0
         while True:
             item = cam.read()
             if item is None:
                 print("camera read failed", file=sys.stderr)
                 return
-            seq += 1
-            ts, frame = item
-            yield seq, ts, frame
+            yield item
     finally:
         cam.close()
 
 
-def frames_from_video(path: str):
+def video_frames(path):
     import cv2
 
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
         raise RuntimeError(f"cannot open {path}")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    print(f"video: {path} @ {fps:.1f} fps")
-    seq = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        seq += 1
-        # Synthetic capture time so latency reflects processing only.
-        yield seq, time.perf_counter(), frame
+        yield time.perf_counter(), frame
     cap.release()
 
 
 def main() -> int:
+    import cv2
+
+    from vision.overlay import draw_face, draw_hud
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config")
     ap.add_argument("--camera", type=int)
     ap.add_argument("--width", type=int)
     ap.add_argument("--height", type=int)
     ap.add_argument("--fps", type=int)
-    ap.add_argument("--video", help="process a video file instead of the webcam")
+    ap.add_argument("--video", help="use a video file instead of the webcam")
     ap.add_argument("--log", help="write per-frame CSV")
-    ap.add_argument("--duration", type=float, help="stop after N seconds")
-    ap.add_argument("--no-window", action="store_true")
     args = ap.parse_args()
 
     vcfg = load_config(args.config)["vision"]
-    model = ROOT / vcfg["model_path"]
-    show = not args.no_window
-    if show:
-        import cv2
-        from vision.overlay import draw_face, draw_hud
+    source = video_frames(args.video) if args.video else camera_frames(args, vcfg)
 
-    stats = Stats()
-    log_file = writer = None
+    writer = log_file = None
     if args.log:
         log_file = open(args.log, "w", newline="")
         writer = csv.writer(log_file)
-        writer.writerow(["t", "seq", "infer_ms", "latency_ms", "n_faces", "score",
+        writer.writerow(["t", "test", "infer_ms", "latency_ms", "n_faces", "score",
                          "bx", "by", "bw", "bh",
                          *[f"{n}_{a}" for n in KEYPOINT_NAMES for a in "xy"],
                          "ipd_px", "yaw_deg", "roll_deg"])
 
-    source = frames_from_video(args.video) if args.video else frames_from_camera(args, vcfg)
-    t_start = last_print = None
-    try:
-        with BlazeFaceDetector(model, vcfg["min_confidence"]) as det:
-            for seq, ts, frame in source:
-                if t_start is None:  # start the clock at the first frame, not camera open
-                    t_start = last_print = ts
-                faces = det.detect(frame, ts)
-                latency = (time.perf_counter() - ts) * 1000.0
-                face = primary_face(faces)
-                stats.add(ts, det.last_infer_ms, latency, face)
+    frame_times: list[float] = []
+    latencies: list[float] = []
+    active: Test | None = None
+    active_start = 0.0
 
-                yaw = roll = float("nan")
+    with BlazeFaceDetector(ROOT / vcfg["model_path"], vcfg["min_confidence"]) as det:
+        for ts, frame in source:
+            faces = det.detect(frame, ts)
+            latency = (time.perf_counter() - ts) * 1000.0
+            face = primary_face(faces)
+            frame_times = (frame_times + [ts])[-60:]
+            latencies.append(latency)
+
+            sample = Sample(ts, face is not None)
+            if face is not None:
+                sample.eye_mid = face.eye_mid
+                sample.yaw = estimate_yaw_deg(face.keypoints)
+                sample.roll = estimate_roll_deg(face.keypoints)
+                sample.ipd = face.ipd_px
+
+            # Run the active test: countdown, then record for its duration.
+            status = "Press 1-4 to run a test, q to quit"
+            if active is not None:
+                elapsed = ts - active_start
+                if elapsed < COUNTDOWN_S:
+                    status = f"[{active.name}] {active.instruction} - starting in {COUNTDOWN_S - elapsed:.0f}"
+                elif elapsed < COUNTDOWN_S + active.duration_s:
+                    active.samples.append(sample)
+                    left = COUNTDOWN_S + active.duration_s - elapsed
+                    status = f"[{active.name}] RECORDING {left:4.1f}s - {active.instruction}"
+                else:
+                    active.passed, active.result = active.evaluate(active.samples)
+                    print(f"{active.name:9s} {verdict(active.passed):5s} {active.result}")
+                    active = None
+
+            if writer:
+                row = [f"{ts:.4f}", active.name if active else "", f"{det.last_infer_ms:.3f}",
+                       f"{latency:.3f}", len(faces)]
                 if face is not None:
-                    yaw, roll = estimate_yaw_deg(face.keypoints), estimate_roll_deg(face.keypoints)
+                    row += [f"{face.score:.3f}", *np.round(face.bbox, 1),
+                            *np.round(face.keypoints.ravel(), 1),
+                            f"{face.ipd_px:.1f}", f"{sample.yaw:.1f}", f"{sample.roll:.1f}"]
+                writer.writerow(row)
 
-                if writer:
-                    row = [f"{ts - t_start:.4f}", seq, f"{det.last_infer_ms:.3f}", f"{latency:.3f}", len(faces)]
-                    if face is not None:
-                        row += [f"{face.score:.3f}", *np.round(face.bbox, 1),
-                                *np.round(face.keypoints.ravel(), 1),
-                                f"{face.ipd_px:.1f}", f"{yaw:.1f}", f"{roll:.1f}"]
-                    writer.writerow(row)
+            fps = (len(frame_times) - 1) / (frame_times[-1] - frame_times[0]) if len(frame_times) > 1 else 0.0
+            hud = [f"fps {fps:4.1f}  infer {det.last_infer_ms:4.1f}ms  latency {latency:4.1f}ms  faces {len(faces)}"]
+            if face is not None:
+                hud.append(f"yaw {sample.yaw:+5.1f}  roll {sample.roll:+5.1f}  ipd {face.ipd_px:4.0f}px  "
+                           f"score {face.score:.2f}")
+            else:
+                hud.append("no face")
+            hud += ["", status, ""]
+            hud += [f"{k - ord('0')} {t.name:9s} {verdict(t.passed) if t.result else '-':5s} {t.result}"
+                    for k, t in TESTS.items()]
 
-                hud = [
-                    f"fps {stats.fps:5.1f}   infer {det.last_infer_ms:5.2f} ms   latency {latency:5.2f} ms",
-                    f"detect {np.mean(stats.detected):.0%}   faces {len(faces)}",
-                ]
-                if face is not None:
-                    hud.append(f"yaw {yaw:+6.1f}  roll {roll:+6.1f}  ipd {face.ipd_px:5.1f}px  "
-                               f"jitter {stats.jitter_px:4.2f}px")
+            for f in faces:
+                draw_face(frame, f, primary=f is face)
+            draw_hud(frame, hud)
+            cv2.imshow("m1.2 BlazeFace test", frame)
 
-                now = time.perf_counter()
-                if now - last_print >= 2.0:
-                    print(" | ".join(hud))
-                    last_print = now
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+            if key in TESTS and active is None:
+                active = TESTS[key]
+                active.samples, active.result, active.passed = [], "", None
+                active_start = ts
 
-                if show:
-                    for f in faces:
-                        draw_face(frame, f, primary=f is face)
-                    draw_hud(frame, hud)
-                    cv2.imshow("m1.2 BlazeFace check", frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord("q"):
-                        break
-                    if key == ord("r"):
-                        stats.reset()
+    cv2.destroyAllWindows()
+    if log_file:
+        log_file.close()
 
-                if args.duration and now - t_start >= args.duration:
-                    break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if log_file:
-            log_file.close()
-        if show:
-            cv2.destroyAllWindows()
-
-    print("\n" + stats.summary())
+    print("\n=== Milestone 1.2 summary ===")
+    for t in TESTS.values():
+        print(f"{t.name:9s} {verdict(t.passed) if t.result else 'not run':7s} {t.result}")
+    if latencies:
+        lat = np.array(latencies)
+        print(f"latency   p50 {np.percentile(lat, 50):.1f}ms  p95 {np.percentile(lat, 95):.1f}ms")
     return 0
+
+
+def verdict(passed: bool | None) -> str:
+    return {True: "PASS", False: "FAIL", None: "INFO"}[passed]
 
 
 if __name__ == "__main__":

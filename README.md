@@ -59,14 +59,21 @@ python tools/fetch_model.py        # BlazeFace weights -> assets/models/
 ## Milestone 1.2 — BlazeFace validation
 
 ```bash
-python tools/m1_2_vision_check.py              # live overlay: box, 6 keypoints, fps, latency, yaw/roll
-python tools/m1_2_vision_check.py --log m12.csv --duration 60
-python tools/m1_2_vision_check.py --video clip.mp4
+python tools/m1_2_vision_check.py              # test window
+python tools/m1_2_vision_check.py --log m12.csv
 ```
 
-The window shows the face box, the six keypoints (eyes, nose, mouth, ear tragions)
-and live stats. Hold still to read `jitter` (RMS eye-midpoint wobble in pixels).
-`latency` is frame-grabbed → detection-ready and excludes sensor/USB delay.
+Press a key to run a guided test (3 s countdown, then recording); results show
+in the window and print to the terminal on exit:
+
+| Key | Test | What to do | Pass |
+|-----|------|------------|------|
+| 1 | Still | Sit still, look at the camera (10 s) | detect ≥ 95%, jitter < 2 px |
+| 2 | Yaw | Slowly turn head fully left, then right (10 s) | reaches ±30°, detect ≥ 90% |
+| 3 | Move | Move and lean at normal speed (15 s) | detect ≥ 95% |
+| 4 | Distance | Slowly move back to your listening position (15 s) | info: does detection hold? |
+
+`latency` is frame read → detection ready and excludes sensor/USB delay.
 
 Head angles are geometric estimates from the keypoints (`vision/head_pose.py`):
 yaw from the nose offset relative to the ear midpoint, roll from the eye line.
