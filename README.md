@@ -121,13 +121,18 @@ Known limits:
 Assumes the camera sits **on top of the front center (FC) speaker**, level, facing
 the listener. The designated center is then straight ahead of the camera at the
 FC distance `D` (from `config/default.toml`). Output is the top-down offset
-`(x, y)` in meters (`vision/spatial.py`):
+`(x, y)` in meters (`vision/spatial.py`). The ruler is the BlazeFace **face-box
+width** `bw` (real width `Wf`):
 
 ```
-distance  Z = scale · f · IPD / ipd_px      (eye spacing → distance)
-lateral   x = −(u − cx) · IPD / ipd_px − x_bias   (eye spacing as a ruler; image right = room left)
+distance  Z = scale · f · Wf / bw
+lateral   x = −(u − cx) · Wf / bw − x_bias   (face width as a ruler; image right = room left)
 front     y = D − Z                         (+ = toward the front speakers)
 ```
+
+Why not the eye spacing: turning the head shrinks it by cos(yaw) (40° → distance
+30% too far). The face-box width stays within ~2% up to ~50° yaw (measured in the
+m1.2 log) and doesn't change when nodding.
 
 ```bash
 python tools/m2_2_spatial_check.py
@@ -135,15 +140,15 @@ python tools/m2_2_spatial_check.py
 
 | Key | Action |
 |-----|--------|
-| `k` | Calibrate: sit at the intended center, look at the camera, press `k` (1.5 s capture) |
+| `k` | Calibrate: sit at the intended center, face the camera, press `k` (1.5 s capture) |
 | space | Record your averaged position, to compare with a tape measure |
 | `c` / `q` | Switch camera / quit |
 
-Calibration sets `scale` (fixes distance for the real camera FOV and your real IPD)
-and `x_bias` (camera not exactly on the center line); it is saved to
-`config/calibration.json`. Lateral `x` does not depend on the FOV, only on your real
-IPD — set `vision.ipd_m` to your own value for best accuracy (63 mm default can be ~8% off).
+Calibration learns your face width `Wf` (from the eye spacing, while facing the
+camera), `scale` (real camera FOV, so distance is exact at the center) and `x_bias`
+(camera not exactly on the center line); it is saved to `config/calibration.json`.
+Lateral accuracy then depends only on the IPD assumption — set `vision.ipd_m` to
+your own value (the 63 mm default can be ~8% off).
 
-Known limits: head turns shrink the apparent eye spacing, so distance reads too
-far while the head is turned; height and the eye→ear offset are ignored.
-
+Known limits: beyond ~50° yaw the box narrows (~10%); height and the eye→ear
+offset are ignored.

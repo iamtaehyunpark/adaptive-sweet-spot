@@ -8,7 +8,7 @@ map of the speakers, the center and the listener.
     python tools/m2_2_spatial_check.py
 
 Keys:
-    k      calibrate - sit at the intended center, look at the camera, press k
+    k      calibrate - sit at the intended center, face the camera, press k
     space  record your averaged position (compare with a tape measure)
     c      switch camera
     q      quit
@@ -145,7 +145,8 @@ def main() -> int:
                 elif capture["kind"] == "calibrate":
                     cal = mapper.calibrate(faces)
                     cal.save(CAL_PATH)
-                    message = f"calibrated: scale {cal.scale:.3f}, x_bias {cal.x_bias * 100:+.1f} cm (saved)"
+                    message = (f"calibrated: face width {cal.face_width_m * 100:.1f} cm, scale {cal.scale:.3f}, "
+                               f"x_bias {cal.x_bias * 100:+.1f} cm (saved)")
                 else:
                     offs = [mapper.map(f) for f in faces]
                     x = float(np.median([o.x for o in offs]))
@@ -161,8 +162,8 @@ def main() -> int:
                        f"distance {offset.distance:.2f} m   yaw {offset.yaw_deg:+5.1f}")
         else:
             hud.append("no face")
-        hud.append(f"scale {mapper.cal.scale:.3f}  x_bias {mapper.cal.x_bias * 100:+.1f} cm  "
-                   f"(FC distance {center_distance:.2f} m)")
+        hud.append(f"face width {mapper.cal.face_width_m * 100:.1f} cm  scale {mapper.cal.scale:.3f}  "
+                   f"x_bias {mapper.cal.x_bias * 100:+.1f} cm  (FC distance {center_distance:.2f} m)")
         hud += ["", message]
         if capture is not None:
             hud.append(f"{capture['kind']}: hold still... {capture['until'] - ts:3.1f}s")
