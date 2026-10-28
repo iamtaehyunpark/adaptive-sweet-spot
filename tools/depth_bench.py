@@ -184,7 +184,7 @@ def cmd_annotate(args) -> int:
         elif key == ord("q") and not pending:
             break
     cv2.destroyAllWindows()
-    print(f"{len(points)} points saved to {gt_path.relative_to(ROOT)}; meta {meta}")
+    print(f"{len(points)} points saved to {gt_path}; meta {meta}")
     return 0
 
 

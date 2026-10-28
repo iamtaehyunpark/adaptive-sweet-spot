@@ -194,6 +194,14 @@ python tools/depth_bench.py annotate assets/captures/room1  # click points, type
 python tools/depth_bench.py evaluate assets/captures/room1
 ```
 
-`evaluate` reports each model's error raw and after correcting the scale with the
-seat distance only (the planned setup flow measures that one distance by tape).
+`evaluate` reports each model's error raw, after correcting the scale with the
+seat distance, and after correcting it with the tape-measured camera height
+(floor must be in view; `vision/room.py` fits the floor plane).
+
+Status: **MoGe-2 is the provisional default.** On the first real capture (room2)
+both models agreed with each other within a few cm but not with the tape points,
+and the seat distance and camera height implied opposite scale corrections, so the
+reference measurements were not reliable enough to rank the models. Planned
+re-check: floor markers measured along the floor (distance computed from the
+camera height), clicked directly in `annotate`.
 
