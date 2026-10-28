@@ -76,6 +76,12 @@ One page with everything:
   frames from the end of the countdown calibrate your face width exactly as tracking
   measures it.
 - **Suggest** — suggested 5.1 positions on the scan (below), applied with one click.
+- **Camera** — pick the camera from snapshots of every connected one (handy for a phone
+  camera), choose its mode / fps, probe what the driver can adjust (zoom, focus, exposure)
+  and adjust it, or press **Widest view** (minimum zoom + the full-sensor 4:3 mode where
+  available). Saved in `config/camera.json`. Phone cameras choose their lens (e.g.
+  ultra-wide) in the phone app. Changing the camera or its view invalidates the room setup;
+  the page warns until Setup is run again, and Setup captures in the tracking aspect.
 - **Speakers** — place speakers in 3D (drag arrows, Shift+click the scan, or type x/y/z);
   Save writes `config/room.json`, which `load_config()` returns to the DSP.
 - **DSP stream** — every detection is sent over UDP (below).

@@ -325,6 +325,7 @@ events.onmessage = (e) => {
   if (s.live === false) return;
   updateListener(s);
   updateSetup(s.setup, s.room_version);
+  updateCamera(s.camera);
 };
 
 const preview = $('preview');
@@ -513,6 +514,101 @@ $('runSuggest').addEventListener('click', async () => {
 });
 $('applyAll').addEventListener('click', () => applySuggestion(suggestion.speakers.map((s) => s.name)));
 $('showGhosts').addEventListener('change', (e) => { ghostGroup.visible = e.target.checked; });
+
+// ---------------------------------------------------------------- camera tab
+const COMMON_MODES = [[640, 480], [1280, 720], [1280, 960], [1920, 1080], [1920, 1440]];
+let camState = null;
+let modesKey = '';
+let controlsKey = '';
+
+async function cameraAction(action, extra = {}) {
+  const r = await fetch('/api/camera', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, ...extra }) });
+  if (!r.ok) $('camStatus').textContent = (await r.json()).error ?? 'failed';
+}
+
+function updateCamera(c) {
+  if (!c) return;
+  camState = c;
+  const st = c.settings;
+  $('camNow').textContent = `camera ${st.index}: ${c.actual[0]}x${c.actual[1]} @ ${st.fps} fps`
+    + (Object.keys(st.controls ?? {}).length ? ` · ${Object.entries(st.controls).map(([k, v]) => `${k} ${(+v).toFixed(1)}`).join(', ')}` : '');
+  $('camStatus').textContent = c.busy ? `${c.busy}...` : (c.message || 'ready');
+  for (const id of ['camList', 'camProbe', 'camWidest', 'camApply']) $(id).disabled = !!c.busy;
+  const warn = $('camWarn');
+  if (c.matches_setup === false) {
+    warn.hidden = false;
+    warn.textContent = `The camera or its view changed since the room setup (setup used camera ${c.setup_camera.index}, `
+      + `${c.setup_camera.size[0]}x${c.setup_camera.size[1]}). Positions and the scan no longer fit: run Setup again.`;
+  } else {
+    warn.hidden = true;
+  }
+
+  // mode list: probed modes if known, else common modes
+  const modes = c.capabilities?.modes ?? COMMON_MODES;
+  const key = JSON.stringify(modes) + c.actual.join('x');
+  if (key !== modesKey) {
+    modesKey = key;
+    const sel = $('camMode');
+    sel.innerHTML = modes.map(([w, h]) => {
+      const a = w / h;
+      const tag = Math.abs(a - 4 / 3) < 0.02 ? '4:3' : Math.abs(a - 16 / 9) < 0.02 ? '16:9' : a.toFixed(2);
+      return `<option value="${w}x${h}">${w}x${h} (${tag})</option>`;
+    }).join('');
+    sel.value = `${c.actual[0]}x${c.actual[1]}`;
+    if (!sel.value && sel.options.length) sel.selectedIndex = 0;
+    $('camFps').value = String(st.fps);
+  }
+
+  // control sliders for what the driver supports
+  const controls = c.capabilities?.controls ?? {};
+  const ckey = JSON.stringify(Object.keys(controls));
+  if (ckey !== controlsKey) {
+    controlsKey = ckey;
+    const box = $('camControls');
+    box.innerHTML = Object.entries(controls).map(([name, r]) => {
+      const step = r.max - r.min > 20 ? 1 : (r.max - r.min) / 100;
+      const v = st.controls?.[name] ?? r.value;
+      return `<div class="ctl"><span class="muted">${name}</span>`
+        + `<input type="range" data-ctl="${name}" min="${r.min}" max="${r.max}" step="${step}" value="${v}">`
+        + `<span class="ro" id="ctl-${name}">${(+v).toFixed(1)}</span></div>`;
+    }).join('') || (c.capabilities ? '<div class="muted">No adjustable controls exposed by this camera.</div>' : '');
+    box.querySelectorAll('[data-ctl]').forEach((input) => {
+      input.addEventListener('input', () => { $(`ctl-${input.dataset.ctl}`).textContent = (+input.value).toFixed(1); });
+      input.addEventListener('change', () => cameraAction('control', { name: input.dataset.ctl, value: +input.value }));
+    });
+  }
+}
+
+async function refreshCameraGrid() {
+  const { cameras } = await fetch('/api/cameras').then((r) => r.json());
+  $('camGrid').innerHTML = cameras.map((cam) => `<div class="camcard ${cam.active ? 'active' : ''}" data-index="${cam.index}">`
+    + `<img src="data:image/jpeg;base64,${cam.snapshot}" alt="camera ${cam.index}">`
+    + `<div><b>${cam.index}</b> ${cam.name} &middot; ${cam.width}x${cam.height}${cam.active ? ' &middot; in use' : ''}</div></div>`).join('');
+  $('camGrid').querySelectorAll('.camcard').forEach((card) => card.addEventListener('click', () => {
+    if (!card.classList.contains('active')) cameraAction('open', { index: +card.dataset.index });
+  }));
+}
+
+async function waitIdleThen(fn) {
+  for (let i = 0; i < 200; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    if (camState && !camState.busy) break;
+  }
+  fn();
+}
+
+$('camList').addEventListener('click', async () => {
+  await cameraAction('list');
+  await new Promise((r) => setTimeout(r, 400));
+  waitIdleThen(refreshCameraGrid);
+});
+$('camProbe').addEventListener('click', () => cameraAction('probe'));
+$('camWidest').addEventListener('click', () => cameraAction('widest'));
+$('camApply').addEventListener('click', () => {
+  const [w, h] = $('camMode').value.split('x').map(Number);
+  cameraAction('open', { width: w, height: h, fps: +$('camFps').value });
+});
 
 // ---------------------------------------------------------------- picking
 const raycaster = new THREE.Raycaster();

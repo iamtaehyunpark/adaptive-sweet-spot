@@ -22,17 +22,17 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-from config import ROOM_FILE, speaker_position
+from config import CONFIG_DIR, ROOM_FILE, speaker_position
 
 from . import setup as room_setup
 from .bridge import BridgePublisher
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+CAMERA_FILE = CONFIG_DIR / "camera.json"  # chosen camera + mode + controls (per machine)
 ROOT = room_setup.ROOT
 SETUP_COUNTDOWN_S = 5.0
-SETUP_WARMUP_S = 1.5   # after switching to 1080p, let exposure settle
+SETUP_WARMUP_S = 1.5   # after switching to the setup resolution, let exposure settle
 SETUP_CAPTURE_S = 2.0
-SETUP_SIZE = (1920, 1080)
 SETUP_CALIB_S = 2.0    # live detections in the last seconds of the countdown calibrate the face width
 PREVIEW_WIDTH = 640
 PREVIEW_FPS = 15.0
@@ -50,8 +50,20 @@ class LiveTracker(threading.Thread):
 
         self.cfg = cfg
         self.vcfg = cfg["vision"]
-        self.index = self.vcfg["camera_index"] if camera_index is None else camera_index
-        self.size = (self.vcfg["width"], self.vcfg["height"])
+        settings = {"index": self.vcfg["camera_index"], "width": self.vcfg["width"],
+                    "height": self.vcfg["height"], "fps": self.vcfg["fps"], "controls": {}}
+        if CAMERA_FILE.exists():
+            settings.update(json.loads(CAMERA_FILE.read_text()))
+        if camera_index is not None:
+            settings["index"] = camera_index
+        self.cam_settings = settings
+        self.cam = None
+        self.actual_size = (settings["width"], settings["height"])
+        self.capabilities: dict | None = None  # {"modes": [[w, h], ...], "controls": {...}} after a probe
+        self.cameras: list[dict] = []           # camera picker entries with snapshots
+        self.camera_busy = ""
+        self.camera_message = ""
+        self._commands: deque = deque()
         self.pipe = VisionPipeline(self.vcfg, ROOT)
         bridge = cfg["bridge"]
         self.bridge_addr = (bridge["udp_host"], bridge["udp_port"])
@@ -72,6 +84,7 @@ class LiveTracker(threading.Thread):
     def snapshot(self) -> dict:
         with self.lock:
             return {**self._state, "setup": dict(self.setup_state), "room_version": self.room_version,
+                    "camera": self.camera_state(),
                     "bridge": {"host": self.bridge_addr[0], "port": self.bridge_addr[1],
                                "sent": self.publisher.sent if self.publisher else None}}
 
@@ -86,6 +99,23 @@ class LiveTracker(threading.Thread):
 
     def stop(self) -> None:
         self.running = False
+
+    def camera_command(self, action: str, **kw) -> None:
+        """Queue a camera action; it runs on the tracking thread (which owns the camera)."""
+        self._commands.append((action, kw))
+
+    def camera_state(self) -> dict:
+        room = room_setup.load_room()
+        used = (room or {}).get("camera")
+        matches = None
+        if used:
+            cur = self.actual_size
+            matches = (used["index"] == self.cam_settings["index"]
+                       and abs(used["aspect"] - cur[0] / cur[1]) < 0.01
+                       and used.get("controls", {}).get("zoom") == self.cam_settings["controls"].get("zoom"))
+        return {"settings": self.cam_settings, "actual": list(self.actual_size), "capabilities": self.capabilities,
+                "busy": self.camera_busy, "message": self.camera_message, "setup_camera": used,
+                "matches_setup": matches}
 
     # ---------------------------------------------------------------- internals
     def _set_setup(self, **kw) -> None:
@@ -125,10 +155,115 @@ class LiveTracker(threading.Thread):
                 self.jpeg_seq += 1
                 self.preview.notify_all()
 
+    # ---------------------------------------------------------------- camera control
+    def _open(self, settings: dict):
+        from vision.camera import Camera
+
+        cam = Camera(settings["index"], settings["width"], settings["height"], settings["fps"],
+                     controls=settings.get("controls"))
+        return cam
+
+    def _switch(self, settings: dict) -> bool:
+        """Reopen the camera with new settings; falls back to the previous ones on failure."""
+        previous = dict(self.cam_settings)
+        if self.cam is not None:
+            self.cam.close()
+        try:
+            self.cam = self._open(settings)
+        except RuntimeError as e:
+            self.camera_message = f"{e} - back to camera {previous['index']}"
+            self.cam = self._open(previous)
+            settings = previous
+            ok = False
+        else:
+            ok = True
+        if settings["index"] != previous["index"]:
+            self.capabilities = None
+        self.cam_settings = settings
+        self.actual_size = (self.cam.width, self.cam.height)
+        CAMERA_FILE.write_text(json.dumps(settings, indent=2))
+        self.mapper = None
+        self.pipe.reset()
+        self._last = None
+        return ok
+
+    def _snapshot_b64(self, frame) -> str:
+        import base64
+
+        import cv2
+
+        small = cv2.resize(frame, (320, int(frame.shape[0] * 320 / frame.shape[1])))
+        return base64.b64encode(cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])[1].tobytes()).decode()
+
+    def _run_command(self, action: str, kw: dict, frame) -> None:
+        from vision.camera import list_cameras, widest_mode
+
+        self.camera_message = ""
+        if action == "open":
+            settings = {**self.cam_settings, **{k: v for k, v in kw.items() if v is not None}}
+            settings["controls"] = {**self.cam_settings.get("controls", {}), **kw.get("controls", {})} \
+                if settings.get("index") == self.cam_settings["index"] else kw.get("controls", {})
+            self.camera_busy = "switching camera"
+            if self._switch(settings):
+                self.camera_message = (f"camera {self.cam_settings['index']}: {self.actual_size[0]}x{self.actual_size[1]}"
+                                       + ("" if list(self.actual_size) == [settings["width"], settings["height"]]
+                                          else f" (asked for {settings['width']}x{settings['height']})"))
+        elif action == "probe":
+            self.camera_busy = "probing modes and controls"
+            controls = self.cam.probe_controls()
+            modes = self.cam.probe_modes()
+            self._switch(self.cam_settings)  # probing changed the mode
+            self.capabilities = {"modes": [list(m) for m in modes], "controls": controls}
+            self.camera_message = (f"{len(modes)} modes; adjustable: {', '.join(controls) or 'none'}"
+                                   + ("" if controls else " (phone cameras: choose the lens in the phone app)"))
+        elif action == "widest":
+            self.camera_busy = "finding the widest view"
+            if self.capabilities is None:
+                controls = self.cam.probe_controls()
+                modes = self.cam.probe_modes()
+                self.capabilities = {"modes": [list(m) for m in modes], "controls": controls}
+            caps = self.capabilities
+            settings = dict(self.cam_settings)
+            changes = []
+            if "zoom" in caps["controls"]:
+                settings["controls"] = {**settings.get("controls", {}), "zoom": caps["controls"]["zoom"]["min"]}
+                changes.append(f"zoom {caps['controls']['zoom']['min']:g} (minimum)")
+            mode = widest_mode([tuple(m) for m in caps["modes"]])
+            if mode:
+                settings["width"], settings["height"] = mode
+                changes.append(f"{mode[0]}x{mode[1]} (full-sensor aspect)")
+            self._switch(settings)
+            self.camera_message = ("widest view: " + ", ".join(changes) if changes else
+                                   "this camera exposes no zoom or extra modes - on a phone, pick the "
+                                   "ultra-wide lens in its camera app")
+        elif action == "control":
+            name, value = kw["name"], float(kw["value"])
+            actual = self.cam.set_control(name, value)
+            self.cam_settings["controls"] = {**self.cam_settings.get("controls", {}), name: actual}
+            CAMERA_FILE.write_text(json.dumps(self.cam_settings, indent=2))
+            self.camera_message = f"{name} = {actual:g}"
+        elif action == "list":
+            self.camera_busy = "looking for cameras"
+            found = list_cameras(skip={self.cam_settings["index"]}, snapshots=True)
+            entries = [{"index": self.cam_settings["index"], "name": f"camera {self.cam_settings['index']}",
+                        "width": frame.shape[1], "height": frame.shape[0], "active": True,
+                        "snapshot": self._snapshot_b64(frame)}]
+            entries += [{"index": info.index, "name": info.name, "width": info.width, "height": info.height,
+                         "active": False, "snapshot": self._snapshot_b64(f)} for info, f in found]
+            self.cameras = sorted(entries, key=lambda e: e["index"])
+            self.camera_message = f"{len(entries)} camera(s) found"
+        self.camera_busy = ""
+
     def _run_build(self, capture: Path, live_faces: list) -> None:
         try:
             self._set_setup(stage="processing", message="Running the depth model and building the scan...")
             room_setup.build(capture, self.vcfg, log=self._log, live_faces=live_faces)
+            # remember which camera view the setup used (the scan/calibration only fit that view)
+            room = room_setup.load_room()
+            w, h = self.actual_size
+            room["camera"] = {"index": self.cam_settings["index"], "size": [w, h], "aspect": w / h,
+                              "controls": self.cam_settings.get("controls", {})}
+            ROOM_FILE.write_text(json.dumps(room, indent=2))
             self.mapper = None  # reload the new calibration on the next frame
             self.pipe.reset()
             with self.lock:
@@ -141,10 +276,12 @@ class LiveTracker(threading.Thread):
     def run(self) -> None:
         import cv2
 
-        from vision.camera import Camera
+        from vision.camera import setup_mode
 
-        cam = Camera(self.index, *self.size, self.vcfg["fps"])
-        print(f"camera {self.index}: {cam.width}x{cam.height}")
+        self.cam = self._open(self.cam_settings)
+        self.actual_size = (self.cam.width, self.cam.height)
+        print(f"camera {self.cam_settings['index']}: {self.cam.width}x{self.cam.height}")
+        frame = None
         frame_times, det_times = deque(maxlen=60), deque(maxlen=30)
         last_preview = 0.0
         countdown_until = capture_from = capture_until = None
@@ -153,7 +290,15 @@ class LiveTracker(threading.Thread):
         calib_faces: list = []
 
         while self.running:
-            item = cam.read()
+            busy = countdown_until is not None or capture_until is not None
+            if self._commands and frame is not None and not busy:
+                action, kw = self._commands.popleft()
+                try:
+                    self._run_command(action, kw, frame)
+                except Exception as e:  # keep tracking whatever the driver does
+                    self.camera_busy, self.camera_message = "", f"{action} failed: {e}"
+                continue
+            item = self.cam.read()
             if item is None:
                 time.sleep(0.05)
                 continue
@@ -171,8 +316,10 @@ class LiveTracker(threading.Thread):
                     self._set_setup(message=f"Sit at your seat and face the camera... {left:.0f}", remaining=left)
                 else:
                     countdown_until = None
-                    cam.close()
-                    cam = Camera(self.index, *SETUP_SIZE, 30)
+                    modes = [tuple(m) for m in self.capabilities["modes"]] if self.capabilities else None
+                    size = setup_mode(modes, self.actual_size)
+                    self.cam.close()
+                    self.cam = self._open({**self.cam_settings, "width": size[0], "height": size[1], "fps": 30})
                     capture_dir = room_setup.CAPTURES / ("setup-" + time.strftime("%Y%m%d-%H%M%S"))
                     (capture_dir / "frames").mkdir(parents=True, exist_ok=True)
                     capture_from = time.perf_counter() + SETUP_WARMUP_S
@@ -186,11 +333,12 @@ class LiveTracker(threading.Thread):
                     saved += 1
                 if ts >= capture_until:
                     capture_from = capture_until = None
-                    cam.close()
-                    cam = Camera(self.index, *self.size, self.vcfg["fps"])
+                    shot = (frame.shape[1], frame.shape[0])
+                    self.cam.close()
+                    self.cam = self._open(self.cam_settings)
                     self.mapper = None
                     self.pipe.reset()
-                    self._log(f"captured {saved} frames at {SETUP_SIZE[0]}x{SETUP_SIZE[1]} -> {capture_dir}")
+                    self._log(f"captured {saved} frames at {shot[0]}x{shot[1]} -> {capture_dir}")
                     threading.Thread(target=self._run_build, args=(capture_dir, calib_faces), daemon=True).start()
                 if time.perf_counter() - last_preview > 1 / PREVIEW_FPS:
                     last_preview = time.perf_counter()
@@ -230,7 +378,7 @@ class LiveTracker(threading.Thread):
                 last_preview = time.perf_counter()
                 self._publish_preview(frame, face)
 
-        cam.close()
+        self.cam.close()
         self.pipe.close()
         if self.publisher:
             self.publisher.close()
@@ -312,6 +460,8 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                 self._video()
             elif path == "/api/suggest":
                 self._suggest()
+            elif path == "/api/cameras":
+                self._send(json.dumps({"cameras": tracker.cameras if tracker else []}).encode(), "application/json")
             else:
                 self._send(b"not found", "text/plain", 404)
 
@@ -371,6 +521,20 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                 data = json.loads(body) if body else {}
                 if path == "/api/save":
                     save_speakers(data["speakers"])
+                    self._send(b'{"ok": true}', "application/json")
+                elif path == "/api/camera":
+                    if tracker is None:
+                        self._send(b'{"ok": false, "error": "no camera"}', "application/json", 409)
+                        return
+                    action = data.get("action")
+                    if action not in ("open", "probe", "widest", "control", "list"):
+                        raise ValueError(f"unknown camera action {action!r}")
+                    kw = {k: data[k] for k in ("index", "width", "height", "fps", "controls", "name", "value")
+                          if k in data}
+                    for k in ("index", "width", "height", "fps"):
+                        if k in kw:
+                            kw[k] = int(kw[k])
+                    tracker.camera_command(action, **kw)
                     self._send(b'{"ok": true}', "application/json")
                 elif path == "/api/setup":
                     ok = tracker is not None and tracker.request_setup()

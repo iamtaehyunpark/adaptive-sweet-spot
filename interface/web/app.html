@@ -65,6 +65,14 @@
   .badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #e9ecef; color: var(--muted); }
   .badge.warn { background: #fff3bf; color: #8a6d00; }
   #suggestNotes ul { margin: 4px 0; padding-left: 16px; }
+  .warnbox { background: #fff3bf; color: #5c4400; border-radius: 6px; padding: 6px 8px; margin: 4px 0 8px; }
+  .camgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin: 6px 0; }
+  .camcard { border: 2px solid var(--line); border-radius: 6px; padding: 4px; cursor: pointer; background: #f8f9fa; }
+  .camcard.active { border-color: var(--accent); }
+  .camcard img { width: 100%; display: block; border-radius: 4px; }
+  .camcard div { font-size: 11px; margin-top: 3px; }
+  select { font: inherit; padding: 3px 4px; border: 1px solid var(--line); border-radius: 4px; }
+  .ctl { display: grid; grid-template-columns: 90px 1fr 56px; gap: 6px; align-items: center; margin: 4px 0; }
   #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #adb5bd;
     font-size: 15px; pointer-events: none; text-align: center; }
   @media (max-width: 900px) {
@@ -92,6 +100,7 @@
     <button data-tab="live" class="on">Live</button>
     <button data-tab="speakers">Speakers</button>
     <button data-tab="suggest">Suggest</button>
+    <button data-tab="camera">Camera</button>
     <button data-tab="setup">Setup</button>
   </div>
 
@@ -169,6 +178,30 @@
         <li>Mirror left/right pairs; distance differences are compensated by the DSP (delay + level)</li>
       </ul>
     </details>
+  </div>
+
+  <div id="tab-camera" class="tab">
+    <div id="camWarn" class="warnbox" hidden></div>
+    <div class="kv">
+      <div>camera</div><div id="camNow">&ndash;</div>
+      <div>status</div><div id="camStatus" class="muted">&ndash;</div>
+    </div>
+    <div class="row">
+      <button id="camList">Find cameras</button>
+      <button id="camProbe">Probe capabilities</button>
+      <button id="camWidest" class="primary" title="Minimum zoom + full-sensor mode, where the camera allows it">Widest view</button>
+    </div>
+    <div id="camGrid" class="camgrid"></div>
+    <div class="row">
+      <span class="muted">Mode</span><select id="camMode"></select>
+      <span class="muted">fps</span><select id="camFps"><option>15</option><option>24</option><option>30</option><option>60</option></select>
+      <button id="camApply">Apply</button>
+    </div>
+    <div id="camControls"></div>
+    <div class="muted" style="margin-top:8px">Adjustable settings depend on the camera and its driver: Linux webcams usually
+      expose zoom/focus/exposure; on macOS mostly the mode. Phone cameras (Continuity Camera, DroidCam, Camo...) choose
+      the lens - e.g. ultra-wide - in the phone app. A 4:3 mode often shows more than 16:9 (no sensor crop).
+      Changing the camera or its view invalidates the room setup: run Setup again afterwards.</div>
   </div>
 
   <div id="tab-setup" class="tab">
