@@ -19,3 +19,5 @@ config/calibration.json
 # Depth model environments and captures
 .venvs/
 assets/captures/
+config/room.json
+config/room_map.png

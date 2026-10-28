@@ -94,3 +94,17 @@ def test_old_eye_spacing_calibration_file_is_ignored(tmp_path):
     path.write_text('{"scale": 1.3, "x_bias": 0.05}')
     assert Calibration.load(path) == Calibration()
 
+
+
+def test_calibration_from_depth_measures_face_width_and_centers_seat():
+    from vision.spatial import calibration_from_depth
+
+    face = face_at(0.1, 1.8, hfov_deg=72.0, face_w=0.16)
+    cal = calibration_from_depth(face, face_depth_m=1.8, hfov_deg=72.0)
+    assert cal.face_width_m == pytest.approx(0.16, rel=1e-3)
+    m = CenterMapper(W, H, 60.0, center_distance_m=9.9, calibration=cal)  # config values overridden
+    at_seat = m.map(face)
+    assert at_seat.x == pytest.approx(0, abs=1e-3) and at_seat.y == pytest.approx(0, abs=1e-3)
+    moved = m.map(face_at(0.1 + 0.3, 1.5, hfov_deg=72.0, face_w=0.16))
+    assert moved.x == pytest.approx(0.3, abs=1e-3)
+    assert moved.y == pytest.approx(0.3, abs=1e-3)

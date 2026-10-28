@@ -37,54 +37,20 @@ sys.path.insert(0, str(ROOT))
 from config import load_config  # noqa: E402
 
 CAPTURES = ROOT / "assets" / "captures"
-COUNTDOWN_S = 5.0
-CAPTURE_S = 2.0
 PATCH = 7  # px, median window around each tape point
 
 
 def cmd_capture(args) -> int:
-    import cv2
-
-    from vision.camera import Camera
-    from vision.overlay import draw_hud
+    from vision.capture import capture_frames
 
     vcfg = load_config(args.config)["vision"]
     out = CAPTURES / (args.name or time.strftime("%Y%m%d-%H%M%S"))
-    frames_dir = out / "frames"
-    frames_dir.mkdir(parents=True, exist_ok=True)
-
     index = args.camera if args.camera is not None else vcfg["camera_index"]
-    with Camera(index, args.width, args.height, 30) as cam:
-        print(f"camera {index}: {cam.width}x{cam.height}")
-        start = None
-        saved = 0
-        while True:
-            item = cam.read()
-            if item is None:
-                print("camera read failed", file=sys.stderr)
-                return 1
-            ts, frame = item
-            if start is None:
-                status = "Press space, then sit at your seat facing the camera. q to quit."
-            elif ts - start < COUNTDOWN_S:
-                status = f"Sit at your seat, hold still... {COUNTDOWN_S - (ts - start):.0f}"
-            elif ts - start < COUNTDOWN_S + CAPTURE_S:
-                cv2.imwrite(str(frames_dir / f"{saved:03d}.png"), frame)
-                saved += 1
-                status = f"CAPTURING ({saved})"
-            else:
-                break
-            preview = cv2.resize(frame, (frame.shape[1] // 2, frame.shape[0] // 2))
-            draw_hud(preview, [f"{cam.width}x{cam.height}", status])
-            cv2.imshow("depth capture", preview)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                return 1
-            if key == ord(" ") and start is None:
-                start = ts
-    cv2.destroyAllWindows()
-    print(f"saved {saved} frames to {frames_dir.relative_to(ROOT)}")
-    print(f"next: python tools/depth_bench.py annotate {out.relative_to(ROOT)}")
+    saved = capture_frames(out / "frames", index, args.width, args.height, title="depth capture")
+    if not saved:
+        return 1
+    print(f"saved {saved} frames to {out / 'frames'}")
+    print(f"next: python tools/depth_bench.py annotate {out}")
     return 0
 
 

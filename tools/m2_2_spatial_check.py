@@ -13,13 +13,15 @@ Keys:
     c      switch camera
     q      quit
 
-Calibration is saved to config/calibration.json and loaded next time.
+Calibration is saved to config/calibration.json and loaded next time. If the
+room setup (tools/room_setup.py) has run, its calibration, room map and placed
+speakers are used, and k is only needed to re-center.
 """
 
 from __future__ import annotations
 
 import argparse
-import math
+import json
 import sys
 import time
 from pathlib import Path
@@ -29,7 +31,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from config import CONFIG_DIR, load_config  # noqa: E402
+from config import CONFIG_DIR, ROOM_FILE, load_config, speaker_position  # noqa: E402
 from vision.pipeline import VisionPipeline  # noqa: E402
 from vision.source import open_source  # noqa: E402
 from vision.spatial import Calibration, CenterMapper  # noqa: E402
@@ -41,17 +43,31 @@ MAP_SIZE = 480    # px, top-down map panel
 MAP_RANGE_M = 3.0  # map shows +-3 m around the center
 
 
-def speaker_xy(spk: dict) -> tuple[float, float]:
-    az = math.radians(spk["azimuth_deg"])
-    return spk["distance_m"] * math.sin(az), spk["distance_m"] * math.cos(az)
+def load_room_map():
+    """(image, metadata) of the room-setup map, or None."""
+    import cv2
+
+    if not ROOM_FILE.exists():
+        return None
+    meta = json.loads(ROOM_FILE.read_text())["map"]
+    img = cv2.imread(str(CONFIG_DIR / meta["image"]))
+    return (img, meta) if img is not None else None
 
 
-def draw_map(speakers, center_distance, offset, records, height):
+def draw_map(speakers, offset, records, height, room_map=None):
     import cv2
 
     panel = np.full((max(height, MAP_SIZE), MAP_SIZE, 3), 255, np.uint8)
     ppm = MAP_SIZE / (2 * MAP_RANGE_M)
     cx, cy = MAP_SIZE // 2, MAP_SIZE // 2
+    if room_map is not None:
+        # room-map px -> panel px: same seat origin, front up, rescaled
+        img, meta = room_map
+        k = meta["m_per_px"] * ppm
+        ou, ov = meta["origin_px"]
+        affine = np.float32([[k, 0, cx - ou * k], [0, k, cy - ov * k]])
+        panel = cv2.warpAffine(img, affine, (panel.shape[1], panel.shape[0]), flags=cv2.INTER_NEAREST,
+                               borderValue=(255, 255, 255))
 
     def px(x, y):  # room (m) -> panel px; +y (front) is up
         return int(cx + x * ppm), int(cy - y * ppm)
@@ -61,13 +77,15 @@ def draw_map(speakers, center_distance, offset, records, height):
         cv2.line(panel, px(-MAP_RANGE_M, m), px(MAP_RANGE_M, m), (230, 230, 230), 1)
 
     for spk in speakers:
-        x, y = speaker_xy(spk)
+        x, y, _ = speaker_position(spk)
         cv2.rectangle(panel, (px(x, y)[0] - 7, px(x, y)[1] - 7), (px(x, y)[0] + 7, px(x, y)[1] + 7),
                       (60, 60, 60), -1)
         cv2.putText(panel, spk["name"], (px(x, y)[0] + 10, px(x, y)[1] + 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
-    cam = px(0, center_distance + 0.15)
-    cv2.putText(panel, "camera", (cam[0] - 25, cam[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+    fc = next((s for s in speakers if s["name"] == "FC"), None)
+    if fc is not None:
+        cam = px(*speaker_position(fc)[:2])
+        cv2.putText(panel, "camera", (cam[0] - 25, cam[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
 
     c = px(0, 0)
     cv2.line(panel, (c[0] - 10, c[1]), (c[0] + 10, c[1]), (0, 0, 0), 1)
@@ -99,7 +117,9 @@ def main() -> int:
     cfg = load_config(args.config)
     vcfg = cfg["vision"]
     speakers = cfg["speakers"]
-    center_distance = next(s["distance_m"] for s in speakers if s["name"] == "FC")
+    fc = next(s for s in speakers if s["name"] == "FC")
+    center_distance = float(np.hypot(*speaker_position(fc)[:2]))  # overridden by a room-setup calibration
+    room_map = load_room_map()
 
     source = open_source(args, vcfg)
     pipe = VisionPipeline(vcfg, ROOT, max_fps=args.fps)
@@ -163,7 +183,7 @@ def main() -> int:
         else:
             hud.append("no face")
         hud.append(f"face width {mapper.cal.face_width_m * 100:.1f} cm  scale {mapper.cal.scale:.3f}  "
-                   f"x_bias {mapper.cal.x_bias * 100:+.1f} cm  (FC distance {center_distance:.2f} m)")
+                   f"x_bias {mapper.cal.x_bias * 100:+.1f} cm  (seat distance {mapper.center_distance_m:.2f} m)")
         hud += ["", message]
         if capture is not None:
             hud.append(f"{capture['kind']}: hold still... {capture['until'] - ts:3.1f}s")
@@ -172,7 +192,7 @@ def main() -> int:
         if face is not None:
             draw_face(frame, face)
         draw_hud(frame, hud)
-        panel = draw_map(speakers, center_distance, offset, records, h)
+        panel = draw_map(speakers, offset, records, h, room_map)
         if panel.shape[0] != h:
             panel = cv2.resize(panel, (int(MAP_SIZE * h / panel.shape[0]), h))
         cv2.imshow(WINDOW, np.hstack([frame, panel]))

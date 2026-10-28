@@ -41,7 +41,7 @@ stays centered as the listener moves.
 | 2 | 2.1 | DSP sweet-spot shifting via delays + levels | ☐ |
 | 2 | 2.2 | BlazeFace detections → real-world offsets | ◐ tooling done, live validation pending |
 | 3 | 3.1 | Manual re-centering interface | ☐ |
-| 3 | 3.2 | Vision → interface live pipeline | ☐ |
+| 3 | 3.2 | Vision → interface live pipeline | ◐ 3.2b room setup done; 3.2a stream next |
 | 4 | 4.1 | QIDK deployment, end-to-end latency < 25 ms | ☐ |
 | 5 | 5.0 | Arbitrary layouts and head rotation | ☐ |
 | 6 | 6.0 | Automated speaker discovery / calibration | ☐ |
@@ -204,4 +204,36 @@ and the seat distance and camera height implied opposite scale corrections, so t
 reference measurements were not reliable enough to rank the models. Planned
 re-check: floor markers measured along the floor (distance computed from the
 camera height), clicked directly in `annotate`.
+
+## Milestone 3.2b — Room setup: calibration, room map, speaker placement
+
+One-time flow (redo when the room or camera changes), `tools/room_setup.py`:
+
+1. **Capture** from the seat, facing the camera on the FC speaker (2 s at 1080p). Tilt
+   the camera so some floor is visible: it levels the map and gives the camera height.
+2. **Depth**: MoGe-2 (`.venvs/moge2`) gives a metric 3D point map.
+3. **Calibrate**: your face box + its depth give the camera → seat distance, the camera
+   FOV and your real face width → `config/calibration.json`. This replaces the IPD
+   assumption and the `k` key of the 2.2 tool (`k` still re-centers).
+4. **Map**: top-down map around the seat → `config/room_map.png` (floor light, obstacles
+   0.1–2.2 m above the floor dark).
+5. **Place speakers** on the map → `config/room.json`. FC is the camera; FL/FR/SL/SR/LFE
+   start at ITU-style defaults.
+
+```bash
+python tools/room_setup.py                                  # capture + build + place
+python tools/room_setup.py --capture assets/captures/room2  # reuse a capture
+python tools/room_setup.py --place                          # edit speakers only
+python tools/room_setup.py --seat-distance 1.6              # optional tape: lens → face (m)
+python tools/room_setup.py --camera-height 1.05             # optional tape: lens → floor (m)
+```
+
+Placement keys: `1`–`5` select FL FR SL SR LFE, click/drag to place, `[` `]` height
+−/+ 5 cm, `r` reset defaults, `q` save and quit.
+
+Room frame (shared with tracking and DSP): origin at the seat, `+x` listener's right,
+`+y` toward the front (camera/FC), `+z` up relative to the listener's face height.
+`load_config()` returns the placed positions as `speaker["position"]`;
+`config.speaker_position(spk)` gives `(x, y, z)` for placed or configured speakers.
+The 2.2 tool draws the room map and placed speakers behind the live listener.
 

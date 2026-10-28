@@ -57,6 +57,9 @@ class Calibration:
     scale: float = 1.0
     x_bias: float = 0.0
     face_width_m: float = DEFAULT_FACE_WIDTH_M
+    # Set by the room setup (tools/room_setup.py) from the depth model; override config values.
+    hfov_deg: float | None = None
+    center_distance_m: float | None = None
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
@@ -74,11 +77,12 @@ class Calibration:
 class CenterMapper:
     def __init__(self, width: int, height: int, hfov_deg: float, center_distance_m: float,
                  calibration: Calibration | None = None, ipd_m: float = IPD_M):
+        self.cal = calibration or Calibration()
+        hfov_deg = self.cal.hfov_deg or hfov_deg
         self.cx = width / 2
         self.focal_px = (width / 2) / math.tan(math.radians(hfov_deg) / 2)
-        self.center_distance_m = center_distance_m
+        self.center_distance_m = self.cal.center_distance_m or center_distance_m
         self.ipd_m = ipd_m
-        self.cal = calibration or Calibration()
 
     def _raw(self, face: FaceObservation) -> tuple[float, float]:
         """Uncalibrated (distance, lateral offset), using the face-box width as the ruler."""
@@ -102,5 +106,19 @@ class CenterMapper:
         raw = [self._raw(f) for f in faces]
         z_raw = float(np.median([z for z, _ in raw]))
         x_raw = float(np.median([x for _, x in raw]))
-        self.cal = Calibration(self.center_distance_m / z_raw, x_raw, face_width)
+        self.cal = Calibration(self.center_distance_m / z_raw, x_raw, face_width,
+                               self.cal.hfov_deg, self.cal.center_distance_m)
         return self.cal
+
+
+def calibration_from_depth(face: FaceObservation, face_depth_m: float, hfov_deg: float) -> Calibration:
+    """Calibration from one frame where the face's distance along the camera axis is known.
+
+    Replaces the IPD assumption: the real face width follows from the box width,
+    the depth and the focal length. The listener is at the center in this frame.
+    """
+    w = face.frame_size[0]
+    focal_px = (w / 2) / math.tan(math.radians(hfov_deg) / 2)
+    face_width = face.bbox[2] * face_depth_m / focal_px
+    x_raw = -(face.eye_mid[0] - w / 2) * face_width / face.bbox[2]
+    return Calibration(1.0, float(x_raw), float(face_width), float(hfov_deg), float(face_depth_m))
