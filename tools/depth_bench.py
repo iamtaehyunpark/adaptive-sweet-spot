@@ -7,8 +7,9 @@
              distance from the camera lens in the window, Enter to save.
              First point = your face (the seat).
 3. run the models (each in its own env, see tools/depth_infer.py)
-4. evaluate  error of every <model>.npz vs the tape points, raw and after
-             correcting the scale with the seat distance alone
+4. evaluate  error of every <model>.npz vs the tape points: raw, after
+             correcting the scale with the seat distance, and after correcting
+             it with the tape-measured camera height (floor must be in view)
 
     python tools/depth_bench.py capture --name room1
     python tools/depth_bench.py annotate assets/captures/room1
@@ -106,9 +107,12 @@ def cmd_annotate(args) -> int:
     img = first_frame(capture)
     scale = 0.5 if img.shape[1] > 1400 else 1.0
     gt_path = capture / "gt.json"
+    meta_path = capture / "meta.json"
     points = json.loads(gt_path.read_text()) if gt_path.exists() else []
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     pending: list[tuple[int, int]] = []  # clicked point waiting for its distance
     typed = ""
+    entering_height = False
 
     def on_mouse(event, x, y, *_):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -116,6 +120,7 @@ def cmd_annotate(args) -> int:
 
     def save():
         gt_path.write_text(json.dumps(points, indent=2))
+        meta_path.write_text(json.dumps(meta, indent=2))
 
     cv2.namedWindow("annotate")
     cv2.setMouseCallback("annotate", on_mouse)
@@ -126,7 +131,9 @@ def cmd_annotate(args) -> int:
             cv2.circle(view, c, 6, (0, 0, 255), 2)
             cv2.putText(view, f"{i + 1} {p['label']} {p['distance_m']:.2f}m", (c[0] + 8, c[1] - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-        if pending:
+        if entering_height:
+            prompt = f"camera height above the floor = {typed or '_'} m   [Enter save, Esc cancel]"
+        elif pending:
             u, v = pending[0]
             cv2.circle(view, (int(u * scale), int(v * scale)), 8, (0, 200, 255), 2)
             label = "seat (your face)" if not points else f"point {len(points) + 1}"
@@ -135,19 +142,29 @@ def cmd_annotate(args) -> int:
             prompt = "Click your face (the seat) first"
         else:
             prompt = "Click a flat, matte spot (wall, door, sofa back)"
-        draw_hud(view, [prompt, f"{len(points)} points saved   u: undo last   q: quit"])
+        height = f"{meta['camera_height_m']:.2f} m" if "camera_height_m" in meta else "not set"
+        draw_hud(view, [prompt, f"{len(points)} points saved   camera height {height}   "
+                                "h: set camera height   u: undo last   q: quit"])
         cv2.imshow("annotate", view)
 
         key = cv2.waitKey(30) & 0xFF
         if key == 255:
             continue
-        if pending and (chr(key).isdigit() or chr(key) == "."):
+        typing = pending or entering_height
+        if typing and (chr(key).isdigit() or chr(key) == "."):
             typed += chr(key)
-        elif pending and key in (8, 127):  # backspace / delete
+        elif typing and key in (8, 127):  # backspace / delete
             typed = typed[:-1]
-        elif pending and key == 27:  # esc
+        elif typing and key == 27:  # esc
             pending.clear()
-            typed = ""
+            typed, entering_height = "", False
+        elif entering_height and key in (13, 10):
+            try:
+                meta["camera_height_m"] = float(typed)
+            except ValueError:
+                continue
+            typed, entering_height = "", False
+            save()
         elif pending and key in (13, 10):  # enter
             try:
                 dist = float(typed)
@@ -158,13 +175,16 @@ def cmd_annotate(args) -> int:
                            "label": "seat" if not points else f"p{len(points) + 1}"})
             typed = ""
             save()
+        elif key == ord("h") and not pending:
+            pending.clear()
+            typed, entering_height = "", True
         elif key == ord("u") and points and not pending:
             points.pop()
             save()
         elif key == ord("q") and not pending:
             break
     cv2.destroyAllWindows()
-    print(f"{len(points)} points saved to {gt_path.relative_to(ROOT)}")
+    print(f"{len(points)} points saved to {gt_path.relative_to(ROOT)}; meta {meta}")
     return 0
 
 
@@ -178,41 +198,62 @@ def model_distance(npz, u: int, v: int) -> float:
 
 
 def cmd_evaluate(args) -> int:
+    from vision.room import fit_floor
+
     capture = args.capture
     gt = json.loads((capture / "gt.json").read_text())
+    meta_path = capture / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    tape_height = meta.get("camera_height_m")
     if len(gt) < 2:
         raise SystemExit("need at least 2 tape points (seat + one more)")
-    seat, others = gt[0], gt[1:]
+    seat = gt[0]
     results = sorted(capture.glob("*.npz"))
     if not results:
         raise SystemExit("no <model>.npz yet - run tools/depth_infer.py")
 
-    print(f"{len(gt)} tape points; scale correction uses '{seat['label']}' ({seat['distance_m']:.2f} m)\n")
+    print(f"{len(gt)} tape points; seat correction uses '{seat['label']}' ({seat['distance_m']:.2f} m); "
+          f"floor correction uses camera height {tape_height if tape_height else 'not set (press h in annotate)'}\n")
     summary = []
     for path in results:
         npz = np.load(path)
         name = path.stem
-        pred = {i: model_distance(npz, p["u"], p["v"]) for i, p in enumerate(gt)}
-        s = seat["distance_m"] / pred[0]
+        pred = [model_distance(npz, p["u"], p["v"]) for p in gt]
+        corrections = {"seat": seat["distance_m"] / pred[0]}
+        floor = fit_floor(npz["points"])
+        floor_note = "no floor found"
+        if floor is not None:
+            floor_note = (f"floor {floor.inlier_frac:.0%} of image, camera {floor.height_m:.2f} m up, "
+                          f"pitch {floor.pitch_deg:+.1f}, roll {floor.roll_deg:+.1f}")
+            if tape_height:
+                corrections["floor"] = tape_height / floor.height_m
         hfov = np.degrees(2 * np.arctan((npz["points"].shape[1] / 2) / float(npz["fx"])))
         print(f"== {name}  ({npz['model']}, focal from {npz['focal_source']}, HFOV {hfov:.1f} deg, "
-              f"{float(npz['seconds']):.1f}s, scale correction x{s:.3f})")
-        print(f"   {'point':12s} {'tape':>6s} {'raw':>6s} {'err':>7s} {'scaled':>7s} {'err':>7s}")
-        raw_err, cor_err = [], []
+              f"{float(npz['seconds']):.1f}s)")
+        print(f"   {floor_note}")
+        print("   scale corrections: " + ", ".join(f"{k} x{v:.3f}" for k, v in corrections.items()))
+        header = f"   {'point':8s} {'tape':>6s} {'raw':>7s}" + "".join(f" {k + ' corr':>11s}" for k in corrections)
+        print(header)
+        errors = {"raw": []} | {k: [] for k in corrections}
         for i, p in enumerate(gt):
-            d_raw, d_cor = pred[i], pred[i] * s
-            e_raw, e_cor = d_raw - p["distance_m"], d_cor - p["distance_m"]
-            raw_err.append(abs(e_raw) / p["distance_m"])
-            if i > 0:
-                cor_err.append(abs(e_cor) / p["distance_m"])
-            print(f"   {p['label']:12s} {p['distance_m']:6.2f} {d_raw:6.2f} {e_raw * 100:+6.0f}cm "
-                  f"{d_cor:7.2f} {(e_cor * 100 if i else 0):+6.0f}cm")
-        summary.append((name, np.mean(raw_err), np.mean(cor_err)))
+            row = f"   {p['label']:8s} {p['distance_m']:6.2f} {(pred[i] - p['distance_m']) * 100:+6.0f}cm"
+            errors["raw"].append(abs(pred[i] - p["distance_m"]) / p["distance_m"])
+            for k, s in corrections.items():
+                e = pred[i] * s - p["distance_m"]
+                used = k == "seat" and i == 0  # the seat point defines that correction
+                row += f" {'(ref)' if used else f'{e * 100:+6.0f}cm':>11s}"
+                if not used:
+                    errors[k].append(abs(e) / p["distance_m"])
+            print(row)
+        if tape_height and floor is not None:
+            print(f"   camera height: tape {tape_height:.2f} m, model {floor.height_m:.2f} m "
+                  f"({(floor.height_m - tape_height) * 100:+.0f} cm)")
+        summary.append((name, {k: float(np.mean(v)) for k, v in errors.items() if v}))
         print()
 
-    print("== summary (mean |error| / distance; scaled excludes the seat point)")
-    for name, r, c in sorted(summary, key=lambda x: x[2]):
-        print(f"   {name:8s} raw {r * 100:5.1f}%   scale-corrected {c * 100:5.1f}%")
+    print("== summary: mean |error| / distance (a correction's own reference point is excluded)")
+    for name, errs in summary:
+        print(f"   {name:8s} " + "   ".join(f"{k} {v * 100:5.1f}%" for k, v in errs.items()))
     return 0
 
 
