@@ -4,7 +4,8 @@
 1. capture   live preview; press space, sit at the seat during the 5 s countdown,
              then 2 s of 1080p frames are saved to assets/captures/<name>/frames/
 2. annotate  click points on the captured frame and type their tape-measured
-             distance from the camera lens. First point = your face (the seat).
+             distance from the camera lens in the window, Enter to save.
+             First point = your face (the seat).
 3. run the models (each in its own env, see tools/depth_infer.py)
 4. evaluate  error of every <model>.npz vs the tape points, raw and after
              correcting the scale with the seat distance alone
@@ -96,47 +97,71 @@ def first_frame(capture: Path):
 
 
 def cmd_annotate(args) -> int:
+    """Click a point, type its distance in the window, Enter to save (no terminal input needed)."""
     import cv2
+
+    from vision.overlay import draw_hud
 
     capture = args.capture
     img = first_frame(capture)
     scale = 0.5 if img.shape[1] > 1400 else 1.0
     gt_path = capture / "gt.json"
     points = json.loads(gt_path.read_text()) if gt_path.exists() else []
-    clicked: list[tuple[int, int]] = []
+    pending: list[tuple[int, int]] = []  # clicked point waiting for its distance
+    typed = ""
 
     def on_mouse(event, x, y, *_):
         if event == cv2.EVENT_LBUTTONDOWN:
-            clicked.append((int(x / scale), int(y / scale)))
+            pending[:] = [(int(x / scale), int(y / scale))]
+
+    def save():
+        gt_path.write_text(json.dumps(points, indent=2))
 
     cv2.namedWindow("annotate")
     cv2.setMouseCallback("annotate", on_mouse)
-    print("Click a point, then type its tape distance (m) here. "
-          "First point: your face (seat). u = undo last, q = save and quit.")
     while True:
         view = cv2.resize(img, None, fx=scale, fy=scale)
         for i, p in enumerate(points):
             c = (int(p["u"] * scale), int(p["v"] * scale))
             cv2.circle(view, c, 6, (0, 0, 255), 2)
-            cv2.putText(view, f"{i + 1}:{p['distance_m']:.2f}m {p['label']}", (c[0] + 8, c[1] - 8),
+            cv2.putText(view, f"{i + 1} {p['label']} {p['distance_m']:.2f}m", (c[0] + 8, c[1] - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+        if pending:
+            u, v = pending[0]
+            cv2.circle(view, (int(u * scale), int(v * scale)), 8, (0, 200, 255), 2)
+            label = "seat (your face)" if not points else f"point {len(points) + 1}"
+            prompt = f"{label}: tape distance from camera = {typed or '_'} m   [Enter save, Esc cancel]"
+        elif not points:
+            prompt = "Click your face (the seat) first"
+        else:
+            prompt = "Click a flat, matte spot (wall, door, sofa back)"
+        draw_hud(view, [prompt, f"{len(points)} points saved   u: undo last   q: quit"])
         cv2.imshow("annotate", view)
+
         key = cv2.waitKey(30) & 0xFF
-        if clicked:
-            u, v = clicked.pop(0)
-            default = "seat" if not points else f"p{len(points) + 1}"
+        if key == 255:
+            continue
+        if pending and (chr(key).isdigit() or chr(key) == "."):
+            typed += chr(key)
+        elif pending and key in (8, 127):  # backspace / delete
+            typed = typed[:-1]
+        elif pending and key == 27:  # esc
+            pending.clear()
+            typed = ""
+        elif pending and key in (13, 10):  # enter
             try:
-                dist = float(input(f"point {len(points) + 1} at ({u},{v}) - tape distance in m: "))
+                dist = float(typed)
             except ValueError:
-                print("skipped (not a number)")
                 continue
-            label = input(f"  label [{default}]: ").strip() or default
-            points.append({"u": u, "v": v, "distance_m": dist, "label": label})
-            gt_path.write_text(json.dumps(points, indent=2))
-        if key == ord("u") and points:
-            print(f"removed {points.pop()}")
-            gt_path.write_text(json.dumps(points, indent=2))
-        if key == ord("q"):
+            u, v = pending.pop()
+            points.append({"u": u, "v": v, "distance_m": dist,
+                           "label": "seat" if not points else f"p{len(points) + 1}"})
+            typed = ""
+            save()
+        elif key == ord("u") and points and not pending:
+            points.pop()
+            save()
+        elif key == ord("q") and not pending:
             break
     cv2.destroyAllWindows()
     print(f"{len(points)} points saved to {gt_path.relative_to(ROOT)}")
