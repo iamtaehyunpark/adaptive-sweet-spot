@@ -5,6 +5,9 @@ What can be changed depends on the OS backend and the camera: Linux/V4L2 webcams
 only resolution and fps. Phone cameras (Continuity Camera, DroidCam, Camo, ...)
 pick their lens (e.g. ultra-wide) in the phone app, not through the driver.
 Every capability is therefore probed at runtime.
+
+A camera is an index (local device) or a URL (network camera, e.g. a phone app
+serving MJPEG/RTSP over Wi-Fi) - the portable way to use a phone on any OS.
 """
 
 from __future__ import annotations
@@ -14,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+NETWORK_OPEN_TIMEOUT_MS = 4000
 
 # Modes tried when probing (the driver snaps to what it supports).
 PROBE_MODES = [(640, 480), (1280, 720), (1280, 960), (1600, 1200), (1920, 1080), (1920, 1440),
@@ -29,7 +34,7 @@ CONTROL_PROPS = {  # name -> cv2 property name
 
 @dataclass
 class CameraInfo:
-    index: int
+    index: int | str  # device index or network URL
     name: str
     width: int
     height: int
@@ -41,6 +46,36 @@ def _device_name(index: int) -> str:
     if sysfs.exists():
         return sysfs.read_text().strip()
     return f"camera {index}"
+
+
+def open_capture(source: int | str):
+    """cv2.VideoCapture for a device index or a network URL (with an open timeout)."""
+    import cv2
+
+    if isinstance(source, str):
+        return cv2.VideoCapture(source, cv2.CAP_FFMPEG,
+                                [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, NETWORK_OPEN_TIMEOUT_MS,
+                                 cv2.CAP_PROP_READ_TIMEOUT_MSEC, NETWORK_OPEN_TIMEOUT_MS])
+    return cv2.VideoCapture(source)
+
+
+def snapshot(source: int | str):
+    """(CameraInfo, frame) for one source, or None if it delivers no frames."""
+    cap = open_capture(source)
+    try:
+        if not cap.isOpened():
+            return None
+        ok, frame = cap.read()
+        for _ in range(5):  # some cameras deliver black frames right after opening
+            if ok and frame.mean() > 8:
+                break
+            ok, frame = cap.read()
+        if not ok:
+            return None
+        name = source if isinstance(source, str) else _device_name(source)
+        return CameraInfo(source, name, frame.shape[1], frame.shape[0]), frame
+    finally:
+        cap.release()
 
 
 def list_cameras(max_index: int = 6, skip: set[int] | None = None, snapshots: bool = False):
@@ -71,12 +106,12 @@ def list_cameras(max_index: int = 6, skip: set[int] | None = None, snapshots: bo
 
 
 class Camera:
-    def __init__(self, index: int = 0, width: int = 1280, height: int = 720, fps: int = 60,
+    def __init__(self, index: int | str = 0, width: int = 1280, height: int = 720, fps: int = 60,
                  controls: dict[str, float] | None = None):
         import cv2
 
         self.index = index
-        self._cap = cv2.VideoCapture(index)
+        self._cap = open_capture(index)
         if not self._cap.isOpened():
             raise RuntimeError(f"cannot open camera {index}")
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)

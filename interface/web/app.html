@@ -193,6 +193,21 @@
     </div>
     <div id="camGrid" class="camgrid"></div>
     <div class="row">
+      <input id="camUrl" type="text" placeholder="network camera URL, e.g. http://192.168.1.20:8080/video" style="flex:1; min-width:200px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px;">
+      <button id="camUrlGo">Connect</button>
+    </div>
+    <details><summary class="muted">Phone as camera</summary>
+      <ul class="help">
+        <li><b>Any phone, any OS (also the QIDK)</b>: run an IP-camera app on the phone (Android e.g. "IP Webcam";
+          iPhone: an app serving MJPEG/RTSP), same Wi-Fi, paste its stream URL above. Expect more latency than USB.</li>
+        <li><b>iPhone on a Mac (Continuity Camera)</b>: same Apple ID with 2FA, Wi-Fi + Bluetooth on, iPhone Settings &rarr;
+          General &rarr; AirPlay &amp; Continuity &rarr; Continuity Camera on, iPhone near the Mac, locked, still, landscape.
+          Check Photo Booth's Video menu first. Python/OpenCV may still not list it: macOS only offers Continuity Camera to
+          apps that opt in. A webcam app such as Camo shows the phone as a normal camera instead.</li>
+        <li>Choose the lens (ultra-wide) in the phone app; turn off Center Stage / auto-framing (it moves the view).</li>
+      </ul>
+    </details>
+    <div class="row">
       <span class="muted">Mode</span><select id="camMode"></select>
       <span class="muted">fps</span><select id="camFps"><option>15</option><option>24</option><option>30</option><option>60</option></select>
       <button id="camApply">Apply</button>

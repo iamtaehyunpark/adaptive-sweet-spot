@@ -80,7 +80,12 @@ One page with everything:
   camera), choose its mode / fps, probe what the driver can adjust (zoom, focus, exposure)
   and adjust it, or press **Widest view** (minimum zoom + the full-sensor 4:3 mode where
   available). Saved in `config/camera.json`. Phone cameras choose their lens (e.g.
-  ultra-wide) in the phone app. Changing the camera or its view invalidates the room setup;
+  ultra-wide) in the phone app. **Network cameras**: paste a stream URL (MJPEG/RTSP, e.g.
+  a phone IP-camera app on the same Wi-Fi) - works with any phone on macOS and the QIDK.
+  iPhone Continuity Camera on a Mac needs the iPhone set up for it (same Apple ID, Wi-Fi +
+  Bluetooth, Continuity Camera on, iPhone locked nearby) and macOS only offers it to apps
+  that opt in, so Python/OpenCV may not list it; a webcam app such as Camo, or a network
+  stream, avoids that. Changing the camera or its view invalidates the room setup;
   the page warns until Setup is run again, and Setup captures in the tracking aspect.
 - **Speakers** — place speakers in 3D (drag arrows, Shift+click the scan, or type x/y/z);
   Save writes `config/room.json`, which `load_config()` returns to the DSP.

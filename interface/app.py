@@ -200,6 +200,10 @@ class LiveTracker(threading.Thread):
 
         self.camera_message = ""
         if action == "open":
+            if isinstance(kw.get("index"), str):  # network camera: remember the URL for the picker
+                urls = self.cam_settings.get("network", [])
+                if kw["index"] not in urls:
+                    self.cam_settings["network"] = urls + [kw["index"]]
             settings = {**self.cam_settings, **{k: v for k, v in kw.items() if v is not None}}
             settings["controls"] = {**self.cam_settings.get("controls", {}), **kw.get("controls", {})} \
                 if settings.get("index") == self.cam_settings["index"] else kw.get("controls", {})
@@ -243,14 +247,20 @@ class LiveTracker(threading.Thread):
             CAMERA_FILE.write_text(json.dumps(self.cam_settings, indent=2))
             self.camera_message = f"{name} = {actual:g}"
         elif action == "list":
+            from vision.camera import snapshot
+
             self.camera_busy = "looking for cameras"
-            found = list_cameras(skip={self.cam_settings["index"]}, snapshots=True)
+            active = self.cam_settings["index"]
+            found = list_cameras(skip={active}, snapshots=True)
+            for url in self.cam_settings.get("network", []):
+                if url != active and (shot := snapshot(url)):
+                    found.append(shot)
             entries = [{"index": self.cam_settings["index"], "name": f"camera {self.cam_settings['index']}",
                         "width": frame.shape[1], "height": frame.shape[0], "active": True,
                         "snapshot": self._snapshot_b64(frame)}]
             entries += [{"index": info.index, "name": info.name, "width": info.width, "height": info.height,
                          "active": False, "snapshot": self._snapshot_b64(f)} for info, f in found]
-            self.cameras = sorted(entries, key=lambda e: e["index"])
+            self.cameras = sorted(entries, key=lambda e: (isinstance(e["index"], str), str(e["index"])))
             self.camera_message = f"{len(entries)} camera(s) found"
         self.camera_busy = ""
 
@@ -532,7 +542,7 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                     kw = {k: data[k] for k in ("index", "width", "height", "fps", "controls", "name", "value")
                           if k in data}
                     for k in ("index", "width", "height", "fps"):
-                        if k in kw:
+                        if k in kw and not (k == "index" and isinstance(kw[k], str) and "://" in kw[k]):
                             kw[k] = int(kw[k])
                     tracker.camera_command(action, **kw)
                     self._send(b'{"ok": true}', "application/json")

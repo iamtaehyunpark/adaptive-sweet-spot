@@ -586,8 +586,13 @@ async function refreshCameraGrid() {
     + `<img src="data:image/jpeg;base64,${cam.snapshot}" alt="camera ${cam.index}">`
     + `<div><b>${cam.index}</b> ${cam.name} &middot; ${cam.width}x${cam.height}${cam.active ? ' &middot; in use' : ''}</div></div>`).join('');
   $('camGrid').querySelectorAll('.camcard').forEach((card) => card.addEventListener('click', () => {
-    if (!card.classList.contains('active')) cameraAction('open', { index: +card.dataset.index });
+    const idx = card.dataset.index;
+    if (!card.classList.contains('active')) cameraAction('open', { index: /^\d+$/.test(idx) ? +idx : idx });
   }));
+  if (cameras.length <= 1) {
+    $('camGrid').insertAdjacentHTML('beforeend', '<div class="muted" style="grid-column: 1 / -1">Only one camera found. '
+      + 'For a phone, see "Phone as camera" below.</div>');
+  }
 }
 
 async function waitIdleThen(fn) {
@@ -604,6 +609,11 @@ $('camList').addEventListener('click', async () => {
   waitIdleThen(refreshCameraGrid);
 });
 $('camProbe').addEventListener('click', () => cameraAction('probe'));
+$('camUrlGo').addEventListener('click', () => {
+  const url = $('camUrl').value.trim();
+  if (!/^[a-z]+:\/\//i.test(url)) { $('camStatus').textContent = 'enter a URL like http://phone-ip:8080/video'; return; }
+  cameraAction('open', { index: url });
+});
 $('camWidest').addEventListener('click', () => cameraAction('widest'));
 $('camApply').addEventListener('click', () => {
   const [w, h] = $('camMode').value.split('x').map(Number);
