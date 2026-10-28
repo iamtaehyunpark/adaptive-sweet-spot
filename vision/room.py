@@ -93,6 +93,8 @@ def fit_floor(points: np.ndarray, max_tilt_deg: float = 60.0, iterations: int = 
 # ---------------------------------------------------------------------------
 
 FLOOR_BAND_M = 0.05        # within this of the floor plane = floor
+EDGE_REL = 0.03            # depth jump to a neighbour (relative) that marks a flying pixel
+MAX_RANGE_M = 8.0          # drop points farther than this from the camera
 OBSTACLE_BAND_M = (0.10, 2.20)  # heights above the floor drawn as obstacles
 
 
@@ -119,10 +121,33 @@ class RoomModel:
     roll_deg: float | None
     scale: float                  # applied to the model output
     scale_source: str
+    colors: np.ndarray | None = None  # (N, 3) uint8 RGB per point
+    floor_z: float | None = None      # floor height in the room frame (z relative to the face)
 
     @property
     def has_floor(self) -> bool:
         return self.height_above_floor is not None
+
+
+def flying_pixel_mask(points: np.ndarray, rel: float = EDGE_REL) -> np.ndarray:
+    """True where a pixel's depth jumps by more than ``rel`` to any 4-neighbour.
+
+    Depth models smear points across depth discontinuities (between a foreground
+    object and the wall behind it); those points float in mid-air and must go.
+    """
+    d = np.linalg.norm(points, axis=2)
+    jump = np.zeros(d.shape, bool)
+    for axis in (0, 1):
+        diff = np.abs(np.diff(d, axis=axis)) / np.minimum(
+            np.take(d, range(d.shape[axis] - 1), axis=axis), np.take(d, range(1, d.shape[axis]), axis=axis))
+        big = ~(diff <= rel)  # NaN counts as a jump
+        if axis == 0:
+            jump[:-1] |= big
+            jump[1:] |= big
+        else:
+            jump[:, :-1] |= big
+            jump[:, 1:] |= big
+    return jump
 
 
 def face_point(points: np.ndarray, bbox: np.ndarray) -> np.ndarray:
@@ -138,11 +163,14 @@ def face_point(points: np.ndarray, bbox: np.ndarray) -> np.ndarray:
 
 
 def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float | None = None,
-               camera_height_m: float | None = None, stride: int = 2) -> RoomModel:
+               camera_height_m: float | None = None, stride: int = 2,
+               colors: np.ndarray | None = None) -> RoomModel:
     """Room model from a camera-frame metric point map and the listener's face box.
 
     Optional tape measurements fix the model's scale: ``seat_distance_m`` (camera
-    lens -> face, straight line) or ``camera_height_m`` (lens -> floor).
+    lens -> face, straight line) or ``camera_height_m`` (lens -> floor). ``colors``
+    is the (H, W, 3) RGB image the points came from. Flying pixels and points
+    beyond MAX_RANGE_M are removed.
     """
     floor = fit_floor(points)
     face = face_point(points, face_bbox)
@@ -152,8 +180,11 @@ def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float
     elif camera_height_m and floor is not None:
         scale, source = camera_height_m / floor.height_m, "camera height tape"
 
-    pts = points[::stride, ::stride].reshape(-1, 3)
-    pts = pts[np.isfinite(pts).all(axis=1)] * scale
+    keep = np.isfinite(points).all(axis=2) & ~flying_pixel_mask(points)
+    keep &= np.linalg.norm(np.nan_to_num(points, nan=np.inf), axis=2) < MAX_RANGE_M / scale
+    keep = keep[::stride, ::stride].reshape(-1)
+    pts = points[::stride, ::stride].reshape(-1, 3)[keep] * scale
+    cols = colors[::stride, ::stride].reshape(-1, 3)[keep] if colors is not None else None
     face = face * scale
     up = floor.up if floor is not None else np.array([0.0, -1.0, 0.0])
     right, forward, upv = level_basis(up)
@@ -167,17 +198,18 @@ def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float
     room_pts = to_room(pts)
     camera_xy = to_room(np.zeros(3))[:2]
     height = None
-    face_height = cam_height = pitch = roll = None
+    face_height = cam_height = pitch = roll = floor_z = None
     if floor is not None:
         cam_height = floor.height_m * scale
         height = room_pts[:, 2] + (face @ upv) + cam_height  # height above the floor
         face_height = float(face @ upv + cam_height)
+        floor_z = -face_height
         pitch, roll = floor.pitch_deg, floor.roll_deg
     return RoomModel(
         points=room_pts, height_above_floor=height, camera_xy=camera_xy,
         center_distance_m=float(np.hypot(*camera_xy)), face_depth_m=float(face[2]),
         face_height_m=face_height, camera_height_m=cam_height, pitch_deg=pitch, roll_deg=roll,
-        scale=scale, scale_source=source,
+        scale=scale, scale_source=source, colors=cols, floor_z=floor_z,
     )
 
 

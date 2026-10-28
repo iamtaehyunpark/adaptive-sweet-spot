@@ -93,3 +93,16 @@ def test_render_map_origin_is_seat():
     cv = ov - room.camera_xy[1] / 0.05
     assert cv < ov  # camera (front) is drawn above the seat
     assert 0 <= cu < img.shape[1] and 0 <= cv < img.shape[0]
+
+
+def test_flying_pixels_at_depth_edges_are_removed():
+    from vision.room import flying_pixel_mask
+
+    # wall at 4 m with a 1 m-away box in the middle, and one smeared pixel in between
+    pts = np.zeros((40, 40, 3))
+    pts[..., 2] = 4.0
+    pts[10:30, 10:30, 2] = 1.0
+    pts[20, 30, 2] = 2.5  # flying pixel next to the box edge
+    mask = flying_pixel_mask(pts)
+    assert mask[20, 30]
+    assert not mask[0, 0] and not mask[20, 20]  # flat wall and box interior kept
