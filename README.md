@@ -152,3 +152,48 @@ your own value (the 63 mm default can be ~8% off).
 
 Known limits: beyond ~50° yaw the box narrows (~10%); height and the eye→ear
 offset are ignored.
+
+## Milestone 3.2b — Depth model selection (room map / initial calibration)
+
+A one-time metric depth run will build the room map and initialize the camera →
+seat distance. Accuracy comes first, so candidates are compared on your own room
+against tape measurements (`tools/depth_bench.py`, `tools/depth_infer.py`).
+
+| Candidate | Weights | License | Notes |
+|-----------|---------|---------|-------|
+| MoGe-2 ViT-L | `Ruicheng/moge-2-vitl-normal` | MIT | metric point map + own focal estimate; official ONNX export |
+| Depth Anything 3 Metric-L | `depth-anything/DA3METRIC-LARGE` | Apache 2.0 | needs the focal length (taken from MoGe-2's estimate) |
+
+MoGe-3 is excluded: its refinement depends on FlexGEMM/Triton (no macOS, no Adreno/Hexagon).
+
+Each model has its own environment (their dependencies conflict):
+
+```bash
+# MoGe-2 (v2 code does not need FlexGEMM, so install the package without deps)
+uv venv .venvs/moge2 --python 3.12
+VIRTUAL_ENV=.venvs/moge2 uv pip install "torch>=2.4" "torchvision>=0.19" "numpy>=2" opencv-python-headless \
+  scipy pillow trimesh huggingface-hub requests tqdm click \
+  "utils3d_moge @ git+https://github.com/EasternJournalist/utils3d-moge.git@62f09d58509485564e24d5d9f6aac9ee9ebc0c37" \
+  "pipeline @ git+https://github.com/EasternJournalist/pipeline.git@1c511390d90226c00c101f34b84df26a0f8789b4"
+VIRTUAL_ENV=.venvs/moge2 uv pip install --no-deps "moge @ git+https://github.com/microsoft/MoGe.git"
+
+# Depth Anything 3 (no xformers on macOS; pycolmap left out - its libomp clashes with torch)
+uv venv .venvs/da3 --python 3.12
+VIRTUAL_ENV=.venvs/da3 uv pip install "torch>=2" torchvision einops huggingface_hub imageio "numpy<2" \
+  opencv-python-headless pillow omegaconf safetensors trimesh evo plyfile "moviepy==1.0.3" e3nn typer requests addict
+VIRTUAL_ENV=.venvs/da3 uv pip install --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3.git"
+```
+
+Benchmark:
+
+```bash
+python tools/depth_bench.py capture --name room1          # space, then sit at the seat (5 s countdown, 2 s capture)
+python tools/depth_bench.py annotate assets/captures/room1  # click points, type tape distances (first = your face)
+.venvs/moge2/bin/python tools/depth_infer.py moge2 assets/captures/room1
+.venvs/da3/bin/python   tools/depth_infer.py da3   assets/captures/room1
+python tools/depth_bench.py evaluate assets/captures/room1
+```
+
+`evaluate` reports each model's error raw and after correcting the scale with the
+seat distance only (the planned setup flow measures that one distance by tape).
+

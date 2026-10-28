@@ -15,3 +15,7 @@ assets/audio/*.flac
 # Test logs
 *.csv
 config/calibration.json
+
+# Depth model environments and captures
+.venvs/
+assets/captures/
