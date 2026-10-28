@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sweet Spot Live</title>
+<style>
+  :root {
+    --bg: #15171a; --panel: #ffffff; --text: #111111; --muted: #5b6168; --line: #d9dde2;
+    --accent: #e8590c; --ok: #2f9e44; --bad: #c92a2a; --listener: #1098ad; --seat: #d6336c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+  #view { position: fixed; inset: 0; }
+  .card { background: var(--panel); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+  #panel { position: fixed; top: 12px; left: 12px; width: 420px; max-height: calc(100% - 24px); overflow: auto; padding: 0 0 12px; }
+  #side { position: fixed; top: 12px; right: 12px; width: 360px; display: flex; flex-direction: column; gap: 10px; }
+  #side .card { padding: 8px; }
+  #side h2 { font-size: 12px; margin: 0 0 6px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
+  #preview { width: 100%; display: block; border-radius: 6px; background: #000; aspect-ratio: 16 / 9; object-fit: contain; }
+  #top { width: 100%; height: 300px; display: block; border-radius: 6px; background: #fff; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 10px 0; font-weight: 600; color: var(--muted); }
+  .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab { display: none; padding: 10px 16px 0; }
+  .tab.on { display: block; }
+  h1 { font-size: 15px; margin: 12px 16px 2px; }
+  .muted { color: var(--muted); }
+  .help { margin: 6px 0 10px; padding-left: 16px; color: var(--muted); }
+  .help li { margin: 2px 0; }
+  .big { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 6px 0 10px; }
+  .big div { background: #f8f9fa; border-radius: 8px; padding: 8px; }
+  .big b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .big span { color: var(--muted); font-size: 11px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 3px 10px; font-variant-numeric: tabular-nums; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; color: #fff; font-weight: 600; font-size: 12px; }
+  .pill.ok { background: var(--ok); } .pill.bad { background: var(--bad); } .pill.idle { background: #868e96; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; padding: 3px 2px; }
+  td { padding: 3px 2px; border-top: 1px solid var(--line); vertical-align: middle; }
+  tr.sel td { background: #fff1e6; }
+  tbody tr { cursor: pointer; }
+  td.name { font-weight: 600; white-space: nowrap; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  input[type=number] { width: 62px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; }
+  input[type=number]:disabled { background: #f1f3f5; color: var(--muted); }
+  .ro { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  button { font: inherit; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #f8f9fa; cursor: pointer; color: var(--text); }
+  button:hover { background: #eef0f2; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  button.on { background: #212529; color: #fff; border-color: #212529; }
+  #status, #setupMsg { min-height: 18px; margin-top: 6px; }
+  #setupLog { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: #f8f9fa; border-radius: 6px;
+    padding: 6px 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; margin-top: 6px; }
+  .label { font: 600 12px/1 -apple-system, sans-serif; color: #111; background: rgba(255,255,255,.92);
+    padding: 3px 6px; border-radius: 4px; pointer-events: none; white-space: nowrap; }
+  .label.seat { color: #fff; background: var(--seat); }
+  .label.listener { color: #fff; background: var(--listener); }
+  #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #adb5bd;
+    font-size: 15px; pointer-events: none; text-align: center; }
+  @media (max-width: 900px) {
+    #panel { width: calc(100% - 24px); max-height: 48%; }
+    #side { top: auto; bottom: 12px; width: calc(100% - 24px); flex-direction: row; }
+    #side .card { flex: 1; min-width: 0; }
+    #top { height: 160px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="view"></div>
+<div id="empty">No room scan yet.<br>Open the Setup tab and run the setup.</div>
+
+<div id="panel" class="card">
+  <h1>Sweet Spot Live</h1>
+  <div class="muted" style="margin: 0 16px 8px">Seat = origin &middot; x = listener's right &middot; y = toward the front &middot; z = up &middot; meters</div>
+  <div class="tabs">
+    <button data-tab="live" class="on">Live</button>
+    <button data-tab="speakers">Speakers</button>
+    <button data-tab="setup">Setup</button>
+  </div>
+
+  <div id="tab-live" class="tab on">
+    <div class="row"><span id="trackPill" class="pill idle">waiting</span><span id="modeInfo" class="muted"></span></div>
+    <div class="big">
+      <div><b id="vx">&ndash;</b><span>x (right)</span></div>
+      <div><b id="vy">&ndash;</b><span>y (front)</span></div>
+      <div><b id="vz">&ndash;</b><span>z (up)</span></div>
+      <div><b id="vdist">&ndash;</b><span>from camera</span></div>
+      <div><b id="vyaw">&ndash;</b><span>head yaw</span></div>
+      <div><b id="vscore">&ndash;</b><span>confidence</span></div>
+    </div>
+    <div class="kv">
+      <div>camera</div><div id="kCam">&ndash;</div>
+      <div>detection</div><div id="kDet">&ndash;</div>
+      <div>latency / infer</div><div id="kLat">&ndash;</div>
+      <div>calibration</div><div id="kCal">&ndash;</div>
+      <div>DSP stream (UDP)</div><div id="kBridge">&ndash;</div>
+    </div>
+    <div class="row">
+      <span class="muted">View</span>
+      <button data-view="camera">Camera</button>
+      <button data-view="top">Top</button>
+      <button data-view="seat">From seat</button>
+      <button data-view="free">Free</button>
+    </div>
+    <div class="row">
+      <label><input id="showTrail" type="checkbox" checked> trail</label>
+      <label><input id="showLines" type="checkbox" checked> seat lines</label>
+      <span class="muted">points</span><input id="psize" type="range" min="2" max="40" value="10">
+    </div>
+  </div>
+
+  <div id="tab-speakers" class="tab">
+    <ul class="help">
+      <li><b>Orbit</b> drag &middot; <b>pan</b> right-drag &middot; <b>zoom</b> scroll</li>
+      <li><b>Select</b>: click a speaker or its row, or keys 1&ndash;6</li>
+      <li><b>Move</b>: drag its arrows, <b>Shift+click</b> the scan to put it on a surface, or type x / y / z</li>
+    </ul>
+    <table>
+      <thead><tr><th>Speaker</th><th>x</th><th>y</th><th>z</th><th>az / dist</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row">
+      <button id="reset">Reset defaults</button>
+      <button id="save" class="primary">Save</button>
+    </div>
+    <div id="status" class="muted"></div>
+  </div>
+
+  <div id="tab-setup" class="tab">
+    <div class="muted">Initializes everything from one capture: sit at your seat facing the camera
+      (on the FC speaker), ideally with some floor in view. A 5 s countdown, a 2 s 1080p capture,
+      then the depth model builds the 3D scan and the calibration. Tracking keeps running.</div>
+    <div class="row"><button id="runSetup" class="primary">Run setup</button><span id="setupPill" class="pill idle">idle</span></div>
+    <div id="setupMsg"></div>
+    <div class="kv" id="roomInfo"></div>
+    <div id="setupLog" hidden></div>
+  </div>
+</div>
+
+<div id="side">
+  <div class="card"><h2><span>Camera</span><span id="camNote"></span></h2><img id="preview" alt="camera preview"></div>
+  <div class="card"><h2><span>Top view</span><span class="muted">front &uarr;</span></h2><canvas id="top"></canvas></div>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

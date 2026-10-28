@@ -108,3 +108,18 @@ def test_calibration_from_depth_measures_face_width_and_centers_seat():
     moved = m.map(face_at(0.1 + 0.3, 1.5, hfov_deg=72.0, face_w=0.16))
     assert moved.x == pytest.approx(0.3, abs=1e-3)
     assert moved.y == pytest.approx(0.3, abs=1e-3)
+
+
+def test_height_offset_from_eye_position():
+    from vision.spatial import calibration_from_depth
+
+    seat = face_at(0.0, 1.8, face_w=0.16)
+    cal = calibration_from_depth(seat, face_depth_m=1.8, hfov_deg=70.0)
+    m = CenterMapper(W, H, 70.0, 1.8, cal)
+    up = face_at(0.0, 1.8, face_w=0.16)
+    f = (W / 2) / math.tan(math.radians(70.0) / 2)
+    shift_px = 0.1 * f / 1.8  # 10 cm up at 1.8 m
+    up.keypoints[:, 1] -= shift_px
+    up.bbox[1] -= shift_px
+    assert m.map(seat).z == pytest.approx(0, abs=1e-6)
+    assert m.map(up).z == pytest.approx(0.1, abs=1e-3)

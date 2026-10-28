@@ -10,3 +10,4 @@ One script per milestone, plus calibration utilities.
 | `depth_bench.py` | 3.2b Depth model comparison: capture, annotate, evaluate |
 | `depth_infer.py` | 3.2b Run one depth model on a capture (own env per model) |
 | `room_setup.py` | 3.2b Room setup: calibration from depth, room map, speaker placement |
+| `app.py` | **Integrated app**: live tracking on the 3D scan + top view, setup, speakers, DSP stream |

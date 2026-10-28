@@ -41,7 +41,7 @@ stays centered as the listener moves.
 | 2 | 2.1 | DSP sweet-spot shifting via delays + levels | ☐ |
 | 2 | 2.2 | BlazeFace detections → real-world offsets | ◐ tooling done, live validation pending |
 | 3 | 3.1 | Manual re-centering interface | ☐ |
-| 3 | 3.2 | Vision → interface live pipeline | ◐ 3.2b room setup done; 3.2a stream next |
+| 3 | 3.2 | Vision → interface live pipeline | ◐ integrated app + UDP stream done; smoothing/prediction next |
 | 4 | 4.1 | QIDK deployment, end-to-end latency < 25 ms | ☐ |
 | 5 | 5.0 | Arbitrary layouts and head rotation | ☐ |
 | 6 | 6.0 | Automated speaker discovery / calibration | ☐ |
@@ -55,6 +55,55 @@ pip install -e ".[audio,vision]"   # hardware dependencies
 pytest
 python tools/fetch_model.py        # BlazeFace weights -> assets/models/
 ```
+
+## Sweet Spot Live (the integrated app)
+
+```bash
+python tools/app.py            # camera from the config; opens http://127.0.0.1:8765/
+python tools/app.py --camera 1
+python tools/app.py --no-camera   # room / speakers only
+```
+
+One page with everything:
+
+- **Live** — camera → BlazeFace (tracker + adaptive rate) → listener position in the room
+  frame, shown as a moving head (with yaw and a trail) in the **3D scan** and in a **top
+  view**, next to the camera preview. Live x/y/z, distance, yaw, fps, latency, calibration
+  and DSP-stream status.
+- **Setup** — *Run setup* initializes everything from one capture: 5 s countdown (sit at
+  your seat facing the camera), 2 s 1080p capture, MoGe-2 depth, calibration and the 3D
+  scan; the page reloads the room when done. Tracking keeps running, and the tracking
+  frames from the end of the countdown calibrate your face width exactly as tracking
+  measures it.
+- **Speakers** — place speakers in 3D (drag arrows, Shift+click the scan, or type x/y/z);
+  Save writes `config/room.json`, which `load_config()` returns to the DSP.
+- **DSP stream** — every detection is sent over UDP (below).
+
+### Vision → DSP bridge (UDP, message v1)
+
+One JSON object per datagram to `[bridge] udp_host:udp_port` (default `127.0.0.1:9750`),
+sent on every detection (`interface/bridge.py`):
+
+```json
+{"v": 1, "seq": 1234, "t": 1730000000.123, "tracking": true,
+ "x": 0.12, "y": -0.05, "z": 0.02, "yaw_deg": -8.0, "confidence": 0.91}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `t` | sender wall-clock time of the camera frame (s, Unix) |
+| `tracking` | `false` = face lost; x/y/z repeat the last known position |
+| `x`, `y`, `z` | listener offset from the seat, room frame, meters (x right, y front, z up) |
+| `yaw_deg` | head yaw, room frame: 0 = facing front, + = turned right |
+| `confidence` | detector score |
+
+```python
+from interface.bridge import BridgeReceiver
+rx = BridgeReceiver()          # binds 127.0.0.1:9750
+msg = rx.latest()              # newest ListenerMessage or None
+```
+
+Positions are raw per-detection (±2–4 cm jitter); smoothing/prediction is the next step.
 
 ## Milestone 1.2 — BlazeFace validation
 
@@ -230,8 +279,8 @@ python tools/room_setup.py --seat-distance 1.6              # optional tape: len
 python tools/room_setup.py --camera-height 1.05             # optional tape: lens → floor (m)
 ```
 
-3D viewer (opens at `http://127.0.0.1:8765/`; loads three.js from unpkg, so it needs
-internet the first time):
+The live app (`tools/app.py`) runs the same setup from its Setup tab. 3D viewer (opens at
+`http://127.0.0.1:8765/`; loads three.js from unpkg, so it needs internet):
 
 - orbit = drag, pan = right-drag, zoom = scroll; views: Camera / Top / From seat / Free
 - select a speaker by clicking it, its row, or keys `1`–`6`

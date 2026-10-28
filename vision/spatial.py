@@ -50,6 +50,7 @@ class ListenerOffset:
     yaw_deg: float     # image-space head yaw (not used for steering yet)
     timestamp_s: float
     score: float
+    z: float = 0.0     # m, + = up, relative to the face height at calibration
 
 
 @dataclass
@@ -60,6 +61,7 @@ class Calibration:
     # Set by the room setup (tools/room_setup.py) from the depth model; override config values.
     hfov_deg: float | None = None
     center_distance_m: float | None = None
+    z_bias: float = 0.0
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
@@ -80,6 +82,7 @@ class CenterMapper:
         self.cal = calibration or Calibration()
         hfov_deg = self.cal.hfov_deg or hfov_deg
         self.cx = width / 2
+        self.cy = height / 2
         self.focal_px = (width / 2) / math.tan(math.radians(hfov_deg) / 2)
         self.center_distance_m = self.cal.center_distance_m or center_distance_m
         self.ipd_m = ipd_m
@@ -91,12 +94,17 @@ class CenterMapper:
         x = -(face.eye_mid[0] - self.cx) * self.cal.face_width_m / bw
         return z, x
 
+    def _raw_up(self, face: FaceObservation) -> float:
+        """Uncalibrated height offset of the eyes (image up = room up; camera assumed level)."""
+        return -(face.eye_mid[1] - self.cy) * self.cal.face_width_m / face.bbox[2]
+
     def map(self, face: FaceObservation) -> ListenerOffset:
         z, x = self._raw(face)
         z *= self.cal.scale
         x -= self.cal.x_bias
+        up = self._raw_up(face) - self.cal.z_bias
         return ListenerOffset(x, self.center_distance_m - z, z, estimate_yaw_deg(face.keypoints),
-                              face.timestamp_s, face.score)
+                              face.timestamp_s, face.score, up)
 
     def calibrate(self, faces: list[FaceObservation]) -> Calibration:
         """The listener is at the center, facing the camera, for all ``faces``."""
@@ -108,17 +116,31 @@ class CenterMapper:
         x_raw = float(np.median([x for _, x in raw]))
         self.cal = Calibration(self.center_distance_m / z_raw, x_raw, face_width,
                                self.cal.hfov_deg, self.cal.center_distance_m)
+        self.cal.z_bias = float(np.median([self._raw_up(f) for f in faces]))
         return self.cal
 
 
-def calibration_from_depth(face: FaceObservation, face_depth_m: float, hfov_deg: float) -> Calibration:
-    """Calibration from one frame where the face's distance along the camera axis is known.
+def median_face(faces: list[FaceObservation]) -> FaceObservation:
+    """Element-wise median of several detections of a still face (same frame size)."""
+    return FaceObservation(bbox=np.median([f.bbox for f in faces], axis=0),
+                           keypoints=np.median([f.keypoints for f in faces], axis=0),
+                           score=float(np.median([f.score for f in faces])), frame_size=faces[0].frame_size)
+
+
+def calibration_from_depth(face: FaceObservation | list[FaceObservation], face_depth_m: float,
+                           hfov_deg: float) -> Calibration:
+    """Calibration from frames where the face's distance along the camera axis is known.
 
     Replaces the IPD assumption: the real face width follows from the box width,
-    the depth and the focal length. The listener is at the center in this frame.
+    the depth and the focal length. The listener is at the center in these frames.
+    Pass the live tracking detections when available (median-combined): they match
+    the boxes seen while tracking.
     """
-    w = face.frame_size[0]
+    if isinstance(face, list):
+        face = median_face(face)
+    w, h = face.frame_size
     focal_px = (w / 2) / math.tan(math.radians(hfov_deg) / 2)
     face_width = face.bbox[2] * face_depth_m / focal_px
     x_raw = -(face.eye_mid[0] - w / 2) * face_width / face.bbox[2]
-    return Calibration(1.0, float(x_raw), float(face_width), float(hfov_deg), float(face_depth_m))
+    z_raw = -(face.eye_mid[1] - h / 2) * face_width / face.bbox[2]
+    return Calibration(1.0, float(x_raw), float(face_width), float(hfov_deg), float(face_depth_m), float(z_raw))
