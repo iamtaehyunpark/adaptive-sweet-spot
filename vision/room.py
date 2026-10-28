@@ -217,8 +217,11 @@ def render_map(room: RoomModel, m_per_px: float = 0.02, half_extent_m: float = 5
     """Top-down BGR map image (front = up) and metadata to convert room <-> pixels."""
     x, y = room.points[:, 0], room.points[:, 1]
     keep = (np.abs(x) < half_extent_m) & (np.abs(y) < half_extent_m)
-    xmin, xmax = min(x[keep].min(), room.camera_xy[0], 0) - 0.3, max(x[keep].max(), room.camera_xy[0], 0) + 0.3
-    ymin, ymax = min(y[keep].min(), 0) - 0.3, max(y[keep].max(), room.camera_xy[1]) + 0.3
+    # bounds always include the seat (0, 0) and the camera, even with no scan points nearby
+    xs = np.concatenate([x[keep], [0.0, room.camera_xy[0]]])
+    ys = np.concatenate([y[keep], [0.0, room.camera_xy[1]]])
+    xmin, xmax = xs.min() - 0.3, xs.max() + 0.3
+    ymin, ymax = ys.min() - 0.3, ys.max() + 0.3
     w = int((xmax - xmin) / m_per_px) + 1
     h = int((ymax - ymin) / m_per_px) + 1
     origin = (-xmin / m_per_px, ymax / m_per_px)  # pixel of room (0, 0)

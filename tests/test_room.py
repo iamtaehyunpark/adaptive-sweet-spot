@@ -106,3 +106,15 @@ def test_flying_pixels_at_depth_edges_are_removed():
     mask = flying_pixel_mask(pts)
     assert mask[20, 30]
     assert not mask[0, 0] and not mask[20, 20]  # flat wall and box interior kept
+
+
+
+
+def test_render_map_with_no_points_near_the_seat():
+    from vision.room import RoomModel, render_map
+
+    room = RoomModel(points=np.array([[0.0, 30.0, 0.0]]), height_above_floor=None, camera_xy=np.array([0.0, 2.0]),
+                     center_distance_m=2.0, face_depth_m=2.0, face_height_m=None, camera_height_m=None,
+                     pitch_deg=None, roll_deg=None, scale=1.0, scale_source="model")
+    img, meta = render_map(room)
+    assert img.size > 0

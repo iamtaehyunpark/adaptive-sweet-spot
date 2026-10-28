@@ -276,7 +276,8 @@ class LiveTracker(threading.Thread):
     def _run_build(self, capture: Path, live_faces: list) -> None:
         try:
             self._set_setup(stage="processing", message="Running the depth model and building the scan...")
-            room_setup.build(capture, self.vcfg, log=self._log, live_faces=live_faces)
+            room_setup.build(capture, self.vcfg, log=self._log, live_faces=live_faces,
+                             tracking_size=self.actual_size)
             # remember which camera view the setup used (the scan/calibration only fit that view)
             room = room_setup.load_room()
             w, h = self.actual_size

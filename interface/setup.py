@@ -44,9 +44,12 @@ def run_depth(capture: Path, log: Callable[[str], None] = print) -> Path:
     return npz
 
 
-def detect_face(capture: Path, vcfg: dict):
+def detect_face(capture: Path, vcfg: dict, tracking_size: tuple[int, int] | None = None):
     """Face in the middle capture frame: (face at the tracking resolution, face at capture
     resolution, capture frame).
+
+    ``tracking_size`` is the live tracking frame size; without it the capture is scaled
+    to the configured tracking width, keeping its aspect.
 
     Detection runs on the frame resized to the tracking resolution, so the face box used
     for calibration behaves exactly like the boxes seen while tracking (BlazeFace box
@@ -61,7 +64,10 @@ def detect_face(capture: Path, vcfg: dict):
     if not frames:
         raise SetupError(f"no frames in {capture / 'frames'}")
     frame = cv2.imread(str(frames[len(frames) // 2]))
-    small = cv2.resize(frame, (vcfg["width"], vcfg["height"]), interpolation=cv2.INTER_AREA)
+    fh, fw = frame.shape[:2]
+    if tracking_size is None or abs(tracking_size[0] / tracking_size[1] - fw / fh) > 0.01:
+        tracking_size = (vcfg["width"], round(vcfg["width"] * fh / fw))  # never distort the image
+    small = cv2.resize(frame, tracking_size, interpolation=cv2.INTER_AREA)
     with BlazeFaceDetector(ROOT / vcfg["model_path"], vcfg["min_confidence"]) as det:
         tracker = FaceTracker(det, vcfg["roi_scale"], tuple(vcfg["search_levels"]))
         face = tracker.update(small, 0.0)
@@ -71,14 +77,15 @@ def detect_face(capture: Path, vcfg: dict):
             face = tracker.update(small, 0.0) or face
     if face is None:
         raise SetupError("no face found in the capture - sit at the seat facing the camera and retry")
-    k = frame.shape[1] / small.shape[1]
-    full = FaceObservation(bbox=face.bbox * k, keypoints=face.keypoints * k, score=face.score,
-                           frame_size=(frame.shape[1], frame.shape[0]))
+    kx, ky = fw / small.shape[1], fh / small.shape[0]
+    full = FaceObservation(bbox=face.bbox * np.array([kx, ky, kx, ky]), keypoints=face.keypoints * np.array([kx, ky]),
+                           score=face.score, frame_size=(fw, fh))
     return face, full, frame
 
 
 def build(capture: Path, vcfg: dict, seat_distance: float | None = None, camera_height: float | None = None,
-          log: Callable[[str], None] = print, live_faces: list | None = None) -> dict:
+          log: Callable[[str], None] = print, live_faces: list | None = None,
+          tracking_size: tuple[int, int] | None = None) -> dict:
     """Run the setup on a capture; writes calibration, scan and map, returns room.json content.
 
     ``live_faces``: tracking detections from the seat just before the capture (the live
@@ -90,7 +97,7 @@ def build(capture: Path, vcfg: dict, seat_distance: float | None = None, camera_
     from vision.spatial import calibration_from_depth
 
     npz = np.load(run_depth(capture, log))
-    face, face_full, frame = detect_face(capture, vcfg)
+    face, face_full, frame = detect_face(capture, vcfg, tracking_size)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     room = build_room(npz["points"], face_full.bbox, seat_distance, camera_height, colors=rgb)
     width = npz["points"].shape[1]
