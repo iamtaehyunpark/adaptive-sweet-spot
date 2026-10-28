@@ -75,9 +75,42 @@ One page with everything:
   scan; the page reloads the room when done. Tracking keeps running, and the tracking
   frames from the end of the countdown calibrate your face width exactly as tracking
   measures it.
+- **Suggest** — suggested 5.1 positions on the scan (below), applied with one click.
 - **Speakers** — place speakers in 3D (drag arrows, Shift+click the scan, or type x/y/z);
   Save writes `config/room.json`, which `load_config()` returns to the DSP.
 - **DSP stream** — every detection is sent over UDP (below).
+
+### Speaker placement suggestion (Suggest tab, `interface/placement.py`)
+
+Suggests where each speaker should go on the 3D scan for the best sweet spot, then lets
+you apply the positions (and Save them for the DSP). FC is fixed: the camera sits on it.
+
+| Guideline | Source | Used here |
+|-----------|--------|-----------|
+| All speakers on one arc around the listener (equal distance) | ITU-R BS.775 | arc radius = seat → FC; deviation penalized (the DSP compensates delay/level) |
+| C 0°, L/R ±30° | ITU-R BS.775; Dolby allows 22–30° | ideal ±30°, allowed 22–30° |
+| Surrounds 100–120° (110° reference) | ITU-R BS.775; Dolby 90–110° | ideal ±110°, allowed 90–120° |
+| Tweeters at seated ear height; surrounds ear height (ITU) to 1–3 ft above (Dolby-style guides) | ITU / home-theater guides | fronts at ear height, surrounds +0.3 m |
+| Mains 2–4 ft off the front wall, 2–3 ft off side walls; corners build up bass | speaker-placement guides | ≥ 0.6 m preferred for mains, surrounds may be wall-mounted |
+| Aim (toe-in) at the listener | speaker-placement guides | every suggestion aims at the seat (arrow + tilt) |
+| Subwoofer at the front blends best; corners boom; do a subwoofer crawl | SVS, Audioholics | front, off-center, off walls, on the floor |
+| Mirror left/right pairs | — | symmetric angle per pair, distance mismatch penalized |
+
+On the scan: walls are tall surfaces (> 1.4 m above the floor), so a speaker may stand
+beyond low furniture but not behind a wall, inside furniture, or with something blocking
+its line of sight to the listener's head. Directions the camera did not see (mostly
+beside it) are marked *unverified*. The tab also shows the centering at the seat
+(distance spread / max delay; 0 = centered without DSP correction) for the suggested
+vs. the current layout, plus remarks on the seat (off-center between side walls,
+too close to the back wall).
+
+References: [ITU-R BS.775 / Dolby angles](https://theatercalc.com/guides/surround-sound-speaker-placement),
+[speaker angle calculator](https://boomspeaker.com/calculators/surround-sound-speaker-angle-calculator/),
+[Dolby 22–30° / 90–110°](https://www.the-home-cinema-guide.com/surround-sound-speaker-placement.html),
+[surround setup](https://arqen.com/acoustics-101/surround-sound-speaker-placement/),
+[subwoofer placement](https://www.svsound.com/blogs/subwoofer-setup-and-tuning/75365187-the-art-of-subwoofer-placement),
+[subwoofer walls/corners](https://www.audioholics.com/easy-subwoofer-placement),
+[wall distance, tweeter height, toe-in](https://www.soundandvision.com/content/setup-speakers-page-3-0).
 
 ### Vision → DSP bridge (UDP, message v1)
 

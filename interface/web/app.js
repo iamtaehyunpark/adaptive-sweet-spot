@@ -383,6 +383,22 @@ function drawTop() {
     tctx.fillStyle = '#111';
     tctx.fillText(s.name, x + 8, y + 4);
   }
+  // suggested positions
+  if (suggestion && $('showGhosts').checked) {
+    tctx.setLineDash([3, 3]);
+    for (const s of suggestion.speakers) {
+      const [x, y] = P(s.position[0], s.position[1]);
+      tctx.strokeStyle = hex(COLORS[s.name] ?? 0x333333);
+      tctx.lineWidth = 1.5;
+      tctx.strokeRect(x - 7, y - 7, 14, 14);
+      const cur = speakers.find((sp) => sp.name === s.name);
+      if (cur) {
+        const [cx, cy] = P(cur.position[0], cur.position[1]);
+        tctx.beginPath(); tctx.moveTo(cx, cy); tctx.lineTo(x, y); tctx.stroke();
+      }
+    }
+    tctx.setLineDash([]);
+  }
   // trail + listener
   if (trail.length > 1) {
     tctx.strokeStyle = 'rgba(16,152,173,.5)'; tctx.lineWidth = 2;
@@ -401,6 +417,102 @@ function drawTop() {
     tctx.fillText(`${fmt(live.x)}, ${fmt(live.y)} m`, lx + 10, ly + 16);
   }
 }
+
+// ---------------------------------------------------------------- suggestion mode
+let suggestion = null;
+let ghostGroup = new THREE.Group();
+scene.add(ghostGroup);
+
+function buildGhosts() {
+  disposeGroup(ghostGroup);
+  ghostGroup = new THREE.Group();
+  scene.add(ghostGroup);
+  if (!suggestion) return;
+  ghostGroup.visible = $('showGhosts').checked;
+  const seat = new THREE.Vector3(0, 0, 0);
+  for (const s of suggestion.speakers) {
+    const color = COLORS[s.name] ?? 0xffffff;
+    const geom = s.lfe ? new THREE.BoxGeometry(0.3, 0.3, 0.3) : new THREE.BoxGeometry(0.14, 0.22, 0.14);
+    const p = toThree(s.position);
+    const box = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthWrite: false }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geom), new THREE.LineBasicMaterial({ color }));
+    box.position.copy(p);
+    edges.position.copy(p);
+    const aim = new THREE.ArrowHelper(new THREE.Vector3().subVectors(seat, p).normalize(), p, 0.4, color, 0.09, 0.05);
+    const lab = label(`${s.name} ✓`, 'ghost');
+    lab.position.copy(p).add(new THREE.Vector3(0, s.lfe ? 0.3 : 0.25, 0));
+    ghostGroup.add(box, edges, aim, lab);
+    const cur = speakers.find((sp) => sp.name === s.name);
+    if (cur && cur.position.some((v, k) => Math.abs(v - s.position[k]) > 0.02)) {
+      const g = new THREE.BufferGeometry().setFromPoints([toThree(cur.position), p]);
+      const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color, dashSize: 0.06, gapSize: 0.04 }));
+      line.computeLineDistances();
+      ghostGroup.add(line);
+    }
+  }
+}
+
+function analysisText(a) {
+  return `distance spread ${a.distance_spread_m.toFixed(2)} m, max delay ${a.max_delay_ms.toFixed(2)} ms`;
+}
+
+function renderSuggestion() {
+  const table = $('suggestTable');
+  const rows = $('suggestRows');
+  rows.innerHTML = '';
+  table.hidden = !suggestion;
+  $('applyAll').disabled = !suggestion;
+  if (!suggestion) return;
+  for (const s of suggestion.speakers) {
+    const tr = document.createElement('tr');
+    const fixed = FIXED.has(s.name);
+    tr.innerHTML = `<td class="name"><span class="swatch" style="background:${hex(COLORS[s.name] ?? 0xffffff)}"></span>${s.name}`
+      + `${s.verified ? '' : ' <span class="badge warn" title="Not visible in the scan - check the spot is free">unverified</span>'}</td>`
+      + `<td class="ro">${fmt(s.azimuth_deg, 0)}&deg;</td><td class="ro">${s.distance_m.toFixed(2)} m</td>`
+      + `<td class="ro">${fmt(s.position[2])} m</td>`
+      + `<td class="ro" title="point it at the seat">tilt ${fmt(s.aim_pitch_deg, 0)}&deg;</td>`
+      + `<td>${fixed ? '<span class="muted">fixed</span>' : `<button data-apply="${s.name}">Apply</button>`}</td>`;
+    rows.appendChild(tr);
+  }
+  rows.querySelectorAll('[data-apply]').forEach((b) => b.addEventListener('click', () => applySuggestion([b.dataset.apply])));
+
+  const notes = [];
+  for (const s of suggestion.speakers) for (const n of s.notes) notes.push(`<li><b>${s.name}</b>: ${n}</li>`);
+  for (const n of suggestion.room) notes.push(`<li><b>room</b>: ${n}</li>`);
+  $('suggestNotes').innerHTML =
+    `<div><b>Centering at the seat</b> (0 = centered without DSP correction)</div>`
+    + `<div>suggested: ${analysisText(suggestion.analysis)}</div>`
+    + `<div class="muted">current: ${analysisText(suggestion.current_analysis)}</div>`
+    + `<div style="margin-top:6px">arc radius ${suggestion.arc_radius_m.toFixed(2)} m (seat &rarr; FC) &middot; scan covers ${(suggestion.scan_coverage * 100).toFixed(0)}% of directions</div>`
+    + (notes.length ? `<ul>${notes.join('')}</ul>` : '');
+}
+
+function applySuggestion(names) {
+  for (const name of names) {
+    const sug = suggestion.speakers.find((s) => s.name === name);
+    const s = speakers.find((sp) => sp.name === name);
+    if (!sug || !s || FIXED.has(name)) continue;
+    s.position = [...sug.position];
+    s.placed = true;
+    updateSpeaker(s);
+  }
+  buildGhosts();
+  $('suggestMsg').textContent = `applied ${names.filter((n) => !FIXED.has(n)).join(', ')} - press Save in the Speakers tab to keep it`;
+}
+
+$('runSuggest').addEventListener('click', async () => {
+  $('suggestMsg').textContent = 'analyzing the scan...';
+  const r = await fetch('/api/suggest');
+  const data = await r.json();
+  if (!r.ok) { $('suggestMsg').textContent = data.error ?? 'failed'; return; }
+  suggestion = data;
+  $('suggestMsg').textContent = 'Suggested positions are the outlined boxes; arrows show where to aim them.';
+  buildGhosts();
+  renderSuggestion();
+  setView('top');
+});
+$('applyAll').addEventListener('click', () => applySuggestion(suggestion.speakers.map((s) => s.name)));
+$('showGhosts').addEventListener('change', (e) => { ghostGroup.visible = e.target.checked; });
 
 // ---------------------------------------------------------------- picking
 const raycaster = new THREE.Raycaster();

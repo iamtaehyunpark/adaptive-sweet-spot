@@ -60,6 +60,11 @@
     padding: 3px 6px; border-radius: 4px; pointer-events: none; white-space: nowrap; }
   .label.seat { color: #fff; background: var(--seat); }
   .label.listener { color: #fff; background: var(--listener); }
+  .label.ghost { background: rgba(255,255,255,.55); border: 1px dashed #495057; }
+  .info { margin-top: 8px; font-size: 12px; }
+  .badge { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #e9ecef; color: var(--muted); }
+  .badge.warn { background: #fff3bf; color: #8a6d00; }
+  #suggestNotes ul { margin: 4px 0; padding-left: 16px; }
   #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #adb5bd;
     font-size: 15px; pointer-events: none; text-align: center; }
   @media (max-width: 900px) {
@@ -86,6 +91,7 @@
   <div class="tabs">
     <button data-tab="live" class="on">Live</button>
     <button data-tab="speakers">Speakers</button>
+    <button data-tab="suggest">Suggest</button>
     <button data-tab="setup">Setup</button>
   </div>
 
@@ -135,6 +141,34 @@
       <button id="save" class="primary">Save</button>
     </div>
     <div id="status" class="muted"></div>
+  </div>
+
+  <div id="tab-suggest" class="tab">
+    <div class="muted">Suggests where to put each speaker on your 3D scan for the best sweet spot:
+      ITU-R BS.775 / Dolby 5.1 angles on an arc around the seat, ear-height tweeters,
+      wall clearance, clear line of sight, symmetric pairs. FC is fixed (the camera sits on it).</div>
+    <div class="row">
+      <button id="runSuggest" class="primary">Suggest layout</button>
+      <button id="applyAll" disabled>Apply all</button>
+      <label><input id="showGhosts" type="checkbox" checked> show on map</label>
+    </div>
+    <div id="suggestMsg" class="muted"></div>
+    <table id="suggestTable" hidden>
+      <thead><tr><th>Speaker</th><th>angle</th><th>dist</th><th>height</th><th>aim</th><th></th></tr></thead>
+      <tbody id="suggestRows"></tbody>
+    </table>
+    <div id="suggestNotes" class="info"></div>
+    <details style="margin-top:8px"><summary class="muted">Guidelines used</summary>
+      <ul class="help">
+        <li>All speakers on one arc around the seat (equal distance) &mdash; ITU-R BS.775</li>
+        <li>Center 0&deg; &middot; front L/R &plusmn;30&deg; (22&ndash;30&deg; allowed) &mdash; ITU / Dolby</li>
+        <li>Surrounds &plusmn;110&deg; (90&ndash;120&deg; allowed), slightly above ear height (+0.3 m here; ITU: ear height, Dolby-style guides: 1&ndash;3 ft above)</li>
+        <li>Tweeters at seated ear height; aim (toe-in) every speaker at the seat</li>
+        <li>Mains ~0.6 m (2 ft) off walls; corners build up bass</li>
+        <li>Subwoofer at the front, off-center, off the walls; fine-tune with a subwoofer crawl</li>
+        <li>Mirror left/right pairs; distance differences are compensated by the DSP (delay + level)</li>
+      </ul>
+    </details>
   </div>
 
   <div id="tab-setup" class="tab">

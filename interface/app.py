@@ -310,8 +310,23 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                 self._events()
             elif path == "/api/video.mjpg":
                 self._video()
+            elif path == "/api/suggest":
+                self._suggest()
             else:
                 self._send(b"not found", "text/plain", 404)
+
+        def _suggest(self):
+            from .placement import centering_analysis, suggest_layout
+
+            room = room_setup.load_room()
+            if room is None or not room_setup.CLOUD_XYZ.exists():
+                self._send(b'{"error": "run the room setup first"}', "application/json", 409)
+                return
+            points = np.fromfile(room_setup.CLOUD_XYZ, np.float32).reshape(-1, 3)
+            result = suggest_layout(room, points, cfg["speakers"])
+            current = room.get("speakers") or defaults()
+            result["current_analysis"] = centering_analysis(current)
+            self._send(json.dumps(result).encode(), "application/json")
 
         def _events(self):
             self.send_response(200)
