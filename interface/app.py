@@ -56,6 +56,11 @@ class LiveTracker(threading.Thread):
             settings.update(json.loads(CAMERA_FILE.read_text()))
         if camera_index is not None:
             settings["index"] = camera_index
+            settings.pop("name", None)
+        else:
+            from vision.camera import mac_devices, resolve_camera_index
+
+            settings["index"] = resolve_camera_index(settings, mac_devices())
         self.cam_settings = settings
         self.cam = None
         self.actual_size = (settings["width"], settings["height"])
@@ -179,6 +184,10 @@ class LiveTracker(threading.Thread):
             ok = True
         if settings["index"] != previous["index"]:
             self.capabilities = None
+        from vision.camera import _device_name
+
+        idx = settings["index"]
+        settings["name"] = idx if isinstance(idx, str) else _device_name(idx)
         self.cam_settings = settings
         self.actual_size = (self.cam.width, self.cam.height)
         CAMERA_FILE.write_text(json.dumps(settings, indent=2))
@@ -255,7 +264,7 @@ class LiveTracker(threading.Thread):
             for url in self.cam_settings.get("network", []):
                 if url != active and (shot := snapshot(url)):
                     found.append(shot)
-            entries = [{"index": self.cam_settings["index"], "name": f"camera {self.cam_settings['index']}",
+            entries = [{"index": active, "name": self.cam_settings.get("name") or f"camera {active}",
                         "width": frame.shape[1], "height": frame.shape[0], "active": True,
                         "snapshot": self._snapshot_b64(frame)}]
             entries += [{"index": info.index, "name": info.name, "width": info.width, "height": info.height,

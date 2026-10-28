@@ -12,7 +12,9 @@ serving MJPEG/RTSP over Wi-Fi) - the portable way to use a phone on any OS.
 
 from __future__ import annotations
 
+import sys
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,12 +42,61 @@ class CameraInfo:
     height: int
 
 
-def _device_name(index: int) -> str:
-    # Linux exposes V4L2 device names in sysfs; elsewhere fall back to the index.
+def mac_devices() -> list[dict] | None:
+    """macOS video devices in OpenCV's index order (AVFoundation), or None elsewhere.
+
+    Needs pyobjc-framework-AVFoundation (optional). OpenCV's AVFoundation backend
+    indexes devicesWithMediaType:video, so the order matches its camera indices.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            from AVFoundation import AVCaptureDevice, AVMediaTypeVideo
+
+            devices = AVCaptureDevice.devicesWithMediaType_(AVMediaTypeVideo)
+    except Exception:
+        return None
+    return [{"name": str(d.localizedName()), "id": str(d.uniqueID()), "model": str(d.modelID()),
+             "type": str(d.deviceType())} for d in devices]
+
+
+def _device_name(index: int, mac: list[dict] | None = None) -> str:
+    # Linux exposes V4L2 device names in sysfs; macOS via AVFoundation; else the index.
     sysfs = Path(f"/sys/class/video4linux/video{index}/name")
     if sysfs.exists():
         return sysfs.read_text().strip()
+    mac = mac if mac is not None else mac_devices()
+    if mac and 0 <= index < len(mac):
+        return mac[index]["name"]
     return f"camera {index}"
+
+
+def is_builtin(device: dict) -> bool:
+    return "BuiltIn" in device.get("type", "")
+
+
+def resolve_camera_index(saved: dict, devices: list[dict] | None) -> int | str:
+    """Camera index to open for the saved choice.
+
+    Indices shift when devices come and go (e.g. an iPhone appearing as Continuity
+    Camera takes index 0), so the choice is matched by name. With no saved name,
+    or if that camera is gone, a built-in camera is preferred so a phone is never
+    picked up unasked.
+    """
+    index = saved.get("index", 0)
+    if isinstance(index, str) or not devices:
+        return index
+    name = saved.get("name")
+    if name:
+        for i, d in enumerate(devices):
+            if d["name"] == name:
+                return i
+    for i, d in enumerate(devices):
+        if is_builtin(d):
+            return i
+    return index if 0 <= index < len(devices) else 0
 
 
 def open_capture(source: int | str):
@@ -87,6 +138,7 @@ def list_cameras(max_index: int = 6, skip: set[int] | None = None, snapshots: bo
     """
     import cv2
 
+    mac = mac_devices()
     found = []
     for i in range(max_index):
         if skip and i in skip:
@@ -99,7 +151,7 @@ def list_cameras(max_index: int = 6, skip: set[int] | None = None, snapshots: bo
                     break
                 ok, frame = cap.read()
             if ok:
-                info = CameraInfo(i, _device_name(i), frame.shape[1], frame.shape[0])
+                info = CameraInfo(i, _device_name(i, mac), frame.shape[1], frame.shape[0])
                 found.append((info, frame) if snapshots else info)
         cap.release()
     return found

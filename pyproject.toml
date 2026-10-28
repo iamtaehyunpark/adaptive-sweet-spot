@@ -11,7 +11,8 @@ dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 audio = ["sounddevice>=0.4", "soundfile>=0.12"]
-vision = ["mediapipe>=0.10", "opencv-python>=4.8"]
+vision = ["mediapipe>=0.10", "opencv-python>=4.8",
+          "pyobjc-framework-AVFoundation; sys_platform == 'darwin'"]  # camera names on macOS
 dev = ["pytest>=8"]
 
 [tool.setuptools]

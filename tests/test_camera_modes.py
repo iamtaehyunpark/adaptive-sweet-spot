@@ -23,3 +23,28 @@ def test_setup_mode_keeps_tracking_aspect():
 def test_setup_mode_without_probe():
     assert setup_mode(None, (1280, 720)) == (1920, 1080)
     assert setup_mode(None, (1280, 960)) == (1280, 960)
+
+
+from vision.camera import resolve_camera_index  # noqa: E402
+
+BUILTIN = {"name": "FaceTime HD Camera", "type": "AVCaptureDeviceTypeBuiltInWideAngleCamera"}
+IPHONE = {"name": "T's iPhone Camera", "type": "AVCaptureDeviceTypeContinuityCamera"}
+
+
+def test_saved_camera_found_by_name_when_indices_shift():
+    saved = {"index": 0, "name": "FaceTime HD Camera"}
+    assert resolve_camera_index(saved, [IPHONE, BUILTIN]) == 1  # iPhone took index 0
+    assert resolve_camera_index({"index": 1, "name": IPHONE["name"]}, [IPHONE, BUILTIN]) == 0
+
+
+def test_no_saved_choice_prefers_builtin_over_phone():
+    assert resolve_camera_index({"index": 0}, [IPHONE, BUILTIN]) == 1
+
+
+def test_missing_saved_camera_falls_back_to_builtin():
+    assert resolve_camera_index({"index": 0, "name": IPHONE["name"]}, [BUILTIN]) == 0
+
+
+def test_network_url_and_unknown_platform_unchanged():
+    assert resolve_camera_index({"index": "http://phone:8080/video"}, [BUILTIN]) == "http://phone:8080/video"
+    assert resolve_camera_index({"index": 2}, None) == 2

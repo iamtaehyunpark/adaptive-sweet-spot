@@ -531,7 +531,7 @@ function updateCamera(c) {
   if (!c) return;
   camState = c;
   const st = c.settings;
-  $('camNow').textContent = `camera ${st.index}: ${c.actual[0]}x${c.actual[1]} @ ${st.fps} fps`
+  $('camNow').textContent = `${st.name ?? `camera ${st.index}`} (#${st.index}): ${c.actual[0]}x${c.actual[1]} @ ${st.fps} fps`
     + (Object.keys(st.controls ?? {}).length ? ` · ${Object.entries(st.controls).map(([k, v]) => `${k} ${(+v).toFixed(1)}`).join(', ')}` : '');
   $('camStatus').textContent = c.busy ? `${c.busy}...` : (c.message || 'ready');
   for (const id of ['camList', 'camProbe', 'camWidest', 'camApply']) $(id).disabled = !!c.busy;
