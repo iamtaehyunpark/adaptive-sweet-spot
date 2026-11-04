@@ -23,11 +23,26 @@ def load_config(path: str | Path | None = None, room: bool | None = None) -> dic
     with open(path, "rb") as f:
         cfg = tomllib.load(f)
     if room and ROOM_FILE.exists():
-        placed = {s["name"]: s for s in json.loads(ROOM_FILE.read_text()).get("speakers", [])}
+        data = json.loads(ROOM_FILE.read_text())
+        placed = {s["name"]: s for s in data.get("speakers", [])}
+        cam = camera_position(data)
         for spk in cfg["speakers"]:
-            if spk["name"] in placed:
+            if spk["name"] == "FC" and cam is not None:
+                spk["position"] = cam  # the camera sits on FC: always where the setup found the camera
+            elif spk["name"] in placed:
                 spk["position"] = placed[spk["name"]]["position"]
     return cfg
+
+
+def camera_position(room: dict) -> list[float] | None:
+    """Room-frame (x, y, z) of the camera (= the FC speaker) from a room setup, or None."""
+    if not room or "camera_xy" not in room:
+        return None
+    z = 0.0  # level with the face when the floor was not seen
+    if room.get("floor_z") is not None and room.get("camera_height_m") is not None:
+        z = room["floor_z"] + room["camera_height_m"]
+    x, y = room["camera_xy"]
+    return [round(float(x), 3), round(float(y), 3), round(float(z), 3)]
 
 
 def speaker_position(spk: dict) -> tuple[float, float, float]:

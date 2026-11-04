@@ -14,7 +14,7 @@ from typing import Callable
 
 import numpy as np
 
-from config import CONFIG_DIR, ROOM_FILE, speaker_position
+from config import CONFIG_DIR, ROOM_FILE, camera_position, speaker_position
 
 ROOT = CONFIG_DIR.parent
 MAP_FILE = CONFIG_DIR / "room_map.png"
@@ -142,8 +142,15 @@ def build(capture: Path, vcfg: dict, seat_distance: float | None = None, camera_
         "face_height_m": room.face_height_m,
         "floor_z": room.floor_z,
         "map": {"image": MAP_FILE.name, **meta},
-        "speakers": previous.get("speakers", []),
+        "speakers": [],
     }
+    # speakers: FC goes to the (possibly moved) camera; ones the user placed by hand are
+    # kept; the rest get this room's defaults (old defaults belong to the old room frame)
+    placed = {s["name"]: s for s in previous.get("speakers", []) if s.get("placed") and s["name"] != "FC"}
+    from config import load_config
+
+    cfg_speakers = load_config(room=False)["speakers"]
+    data["speakers"] = [placed.get(s["name"], s) for s in default_speakers(data, cfg_speakers)]
     ROOM_FILE.write_text(json.dumps(data, indent=2))
     return data
 
@@ -160,11 +167,8 @@ def default_speakers(room: dict | None, cfg_speakers: list[dict]) -> list[dict]:
     d = room["center_distance_m"]
     floor_z = -room["face_height_m"] if room.get("face_height_m") else -1.0
     cam = room["camera_xy"]
-    cam_z = 0.0  # camera height relative to the face (FC sits under/at the camera)
-    if room.get("floor_z") is not None and room.get("camera_height_m") is not None:
-        cam_z = room["floor_z"] + room["camera_height_m"]
     defaults = {
-        "FC": (cam[0], cam[1], cam_z),
+        "FC": tuple(camera_position(room)),
         "FL": (d * math.sin(math.radians(-30)), d * math.cos(math.radians(-30)), 0.0),
         "FR": (d * math.sin(math.radians(30)), d * math.cos(math.radians(30)), 0.0),
         "SL": (0.9 * d * math.sin(math.radians(-110)), 0.9 * d * math.cos(math.radians(-110)), 0.0),
@@ -181,4 +185,12 @@ def default_speakers(room: dict | None, cfg_speakers: list[dict]) -> list[dict]:
 
 
 def load_room() -> dict | None:
-    return json.loads(ROOM_FILE.read_text()) if ROOM_FILE.exists() else None
+    """room.json, with FC always at the camera (it is never stored stale)."""
+    if not ROOM_FILE.exists():
+        return None
+    room = json.loads(ROOM_FILE.read_text())
+    cam = camera_position(room)
+    for s in room.get("speakers", []):
+        if s["name"] == "FC" and cam is not None:
+            s["position"], s["placed"] = cam, True
+    return room
