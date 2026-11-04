@@ -76,10 +76,32 @@ roi_scale = 4.0             # tracking crop = roi_scale x face width
 search_levels = [1, 2, 3]   # when no face: full frame, then 2x2, then 3x3 tiles
 adaptive_rate = true        # detect only as often as head motion needs (vision/rate.py)
 tolerance_mm = 30.0         # allowed position error (~0.1 ms L/R arrival error)
-min_fps = 5.0               # detection rate floor when the head is still
+min_fps = 15.0              # detection rate floor when the head is still (also how fast a move is noticed)
 
 # Milestone 2.2 assumes the camera sits on top of the FC speaker, level, facing the listener.
 
 [bridge]
 udp_host = "127.0.0.1"
 udp_port = 9750
+
+# Sweet-spot DSP (dsp/, run with tools/dsp.py or from the app's Sound tab).
+[dsp]
+mode = "tracking"           # bypass | static (centered on the seat) | tracking (follows the listener)
+volume_db = -12.0           # master volume at start
+virtual_yaw = true          # virtual surround: speakers stay put when you turn your head (camera yaw)
+render = "auto"             # auto | speakers (6-ch DAC) | virtual (virtual surround over stereo/headphones) | downmix
+control_port = 9751         # local UDP control (dsp/control.py)
+max_delay_s = 0.04          # delay line length (13.7 m of path)
+slew = 0.002                # max delay change, s per s (= 0.2 % pitch shift, inaudible)
+gain_tau_s = 0.05           # level change smoothing
+level_compensation = true   # inverse-distance level matching
+offaxis_eq = true           # treble shelf for speakers the listener moved off-axis from
+offaxis_max_db = 3.0        # boost at >= offaxis_full_deg off the speaker's axis
+offaxis_full_deg = 30.0
+shelf_hz = 3000.0
+min_cutoff_hz = 1.5         # One Euro smoothing of the tracked position (still head)
+beta = 6.0                  # ... cutoff rises by beta Hz per m/s of head speed
+predict = false             # extrapolate to when the sound is heard: at ~10-30 detections/s the
+max_predict_s = 0.1         #   velocity lags, overshoots when you stop (+~200 ms settling) - off
+position_tau_s = 0.025      # audio-rate smoothing of the position steps (no ticking when moving)
+input_device = ""           # for the "input" source (live pass-through), e.g. "BlackHole"

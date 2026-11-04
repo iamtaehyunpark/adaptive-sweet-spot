@@ -6,7 +6,10 @@
                (countdown -> 1080p capture -> depth -> calibration/scan) on request
                while tracking continues.
 * serve        local web server (127.0.0.1) for interface/web/app.{html,js}:
-               room data, live events (SSE), camera preview (MJPEG), speaker saving.
+               room data, live events (SSE), camera preview (MJPEG), speaker saving,
+               and the Sound tab: it relays commands to the DSP process (tools/dsp.py,
+               dsp/control.py) and streams its state; manual listener positions
+               (Milestone 3.1) go to the DSP the same way.
 """
 
 from __future__ import annotations
@@ -418,7 +421,32 @@ def _clean_speakers(raw: list[dict], template: list[dict]) -> list[dict]:
     return out
 
 
-def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser: bool = True) -> None:
+class DspLink(threading.Thread):
+    """Polls the DSP process's state for the page and forwards commands to it."""
+
+    def __init__(self, cfg: dict):
+        super().__init__(daemon=True, name="DspLink")
+        from dsp.control import DspClient
+
+        self.client = DspClient(port=cfg.get("dsp", {}).get("control_port", 9751), timeout=3.0)  # restarts take a moment
+        self.poll = DspClient(port=self.client.addr[1])  # own socket: polling never waits on a command
+        self.state: dict | None = None
+        self.running = True
+
+    def run(self) -> None:
+        while self.running:
+            self.state = self.poll.request("status")
+            time.sleep(0.1)
+
+    def command(self, cmd: str, **kw) -> dict | None:
+        reply = self.client.request(cmd, **kw)
+        if reply is not None and reply.get("ok") and "mode" in reply:
+            self.state = reply
+        return reply
+
+
+def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser: bool = True,
+          dsp: DspLink | None = None) -> None:
     """Serve the app until Ctrl-C."""
     lock = threading.Lock()
 
@@ -439,6 +467,8 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
             room = room_setup.load_room() or {}
             room["speakers"] = _clean_speakers(speakers, defaults())
             ROOM_FILE.write_text(json.dumps(room, indent=2))
+        if dsp is not None:
+            dsp.command("reload")  # the DSP steers with the new positions right away
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -480,6 +510,10 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                 self._video()
             elif path == "/api/suggest":
                 self._suggest()
+            elif path == "/api/dsp/devices":
+                refresh = "refresh" in (urlparse(self.path).query or "")
+                reply = dsp.command("devices", refresh=refresh) if dsp else None
+                self._send(json.dumps(reply or {"devices": []}).encode(), "application/json")
             elif path == "/api/cameras":
                 self._send(json.dumps({"cameras": tracker.cameras if tracker else []}).encode(), "application/json")
             else:
@@ -506,6 +540,7 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
             try:
                 while True:
                     state = tracker.snapshot() if tracker else {"live": False}
+                    state["dsp"] = dsp.state if dsp else None
                     self.wfile.write(f"data: {json.dumps(state)}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(1 / EVENTS_HZ)
@@ -556,6 +591,15 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                             kw[k] = int(kw[k])
                     tracker.camera_command(action, **kw)
                     self._send(b'{"ok": true}', "application/json")
+                elif path == "/api/dsp":
+                    cmd = data.pop("cmd", "set")
+                    if cmd not in ("set", "status", "reload"):
+                        raise ValueError(f"unknown dsp command {cmd!r}")
+                    reply = dsp.command(cmd, **data) if dsp else None
+                    if reply is None:
+                        self._send(b'{"ok": false, "error": "DSP not running"}', "application/json", 503)
+                    else:
+                        self._send(json.dumps(reply).encode(), "application/json", 200 if reply.get("ok") else 400)
                 elif path == "/api/setup":
                     ok = tracker is not None and tracker.request_setup()
                     self._send(json.dumps({"ok": ok}).encode(), "application/json", 200 if ok else 409)

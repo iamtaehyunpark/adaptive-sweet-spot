@@ -20,6 +20,8 @@
   #side h2 { font-size: 12px; margin: 0 0 6px; color: var(--muted); font-weight: 600; display: flex; justify-content: space-between; }
   #preview { width: 100%; display: block; border-radius: 6px; background: #000; aspect-ratio: 16 / 9; object-fit: contain; }
   #top { width: 100%; height: 300px; display: block; border-radius: 6px; background: #fff; }
+  #side.wide { width: 640px; }
+  #side.wide #top { height: 560px; }
   .tabs { display: flex; border-bottom: 1px solid var(--line); }
   .tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 10px 0; font-weight: 600; color: var(--muted); }
   .tabs button.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
@@ -73,6 +75,14 @@
   .camcard div { font-size: 11px; margin-top: 3px; }
   select { font: inherit; padding: 3px 4px; border: 1px solid var(--line); border-radius: 4px; }
   .ctl { display: grid; grid-template-columns: 90px 1fr 56px; gap: 6px; align-items: center; margin: 4px 0; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: 0; }
+  .meter { position: relative; height: 8px; width: 70px; background: #e9ecef; border-radius: 4px; overflow: hidden; }
+  .meter i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--ok); }
+  tr.active td { background: #e6fcf5; }
+  .lat { font-variant-numeric: tabular-nums; }
+  .lat b.over { color: var(--bad); }
   #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; color: #adb5bd;
     font-size: 15px; pointer-events: none; text-align: center; }
   @media (max-width: 900px) {
@@ -98,6 +108,7 @@
   <div class="muted" style="margin: 0 16px 8px">Seat = origin &middot; x = listener's right &middot; y = toward the front &middot; z = up &middot; meters</div>
   <div class="tabs">
     <button data-tab="live" class="on">Live</button>
+    <button data-tab="sound">Sound</button>
     <button data-tab="speakers">Speakers</button>
     <button data-tab="suggest">Suggest</button>
     <button data-tab="camera">Camera</button>
@@ -133,6 +144,92 @@
       <label><input id="showLines" type="checkbox" checked> seat lines</label>
       <span class="muted">points</span><input id="psize" type="range" min="2" max="40" value="10">
     </div>
+  </div>
+
+  <div id="tab-sound" class="tab">
+    <div class="row"><span id="dspPill" class="pill idle">DSP off</span><span id="dspDev" class="muted"></span></div>
+    <div id="dspWarn" class="warnbox" hidden></div>
+    <div class="row"><span class="muted" style="width:62px">Steering</span>
+      <span class="seg" id="modeSeg">
+        <button data-mode="bypass" title="no processing - the reference">Bypass</button>
+        <button data-mode="static" title="centered on the seat (Milestone 1.1)">Static</button>
+        <button data-mode="tracking" title="centered on you (Milestones 2.1 / 3.2)">Follow</button>
+      </span></div>
+    <div class="row"><span class="muted" style="width:62px">Output</span>
+      <span class="seg" id="renderSeg">
+        <button data-render="speakers" title="6 channels to the 5.1 DAC">5.1 speakers</button>
+        <button data-render="virtual" title="simulate the 5.1 room over stereo / headphones (best with headphones)">Virtual surround</button>
+        <button data-render="downmix" title="plain stereo downmix, no spatial cues">Downmix</button>
+      </span></div>
+    <div class="row"><span class="muted" style="width:62px">Device</span>
+      <select id="outSel" style="flex:1; min-width:0"></select>
+      <button id="outRefresh" title="re-scan audio devices (e.g. after plugging in the DAC)">&#8635;</button></div>
+    <div class="row"><span class="muted" style="width:62px">Listener</span>
+      <span class="seg" id="lsnSeg">
+        <button data-lsn="tracking" title="positions from the camera tracking">Tracking</button>
+        <button data-lsn="manual" title="set the position by hand (Milestone 3.1)">Manual</button>
+      </span>
+      <span id="manualBox" hidden>
+        x <input id="mx" type="number" step="0.05" value="0"> y <input id="my" type="number" step="0.05" value="0">
+        z <input id="mz" type="number" step="0.05" value="0"> <button id="mSeat">Seat</button>
+      </span></div>
+    <div id="manualHelp" class="muted" hidden>Manual: click or drag in the top view, type x / y / z, or use the arrow keys (5 cm, Shift = 1 cm).</div>
+    <div class="row"><span class="muted" style="width:62px">Source</span>
+      <select id="srcSel">
+        <option value="off">off</option>
+        <option value="identify">identify speakers (one at a time)</option>
+        <option value="center">center test (all 5 mains, same noise)</option>
+        <option value="front">phantom center (FL + FR)</option>
+        <option value="surround">surround pair (SL + SR)</option>
+        <option value="clicks">clicks (mic alignment)</option>
+        <option value="file">file (assets/audio)</option>
+        <option value="input">live input (pass-through)</option>
+        <option value="object">sound object (place it on the map)</option>
+      </select>
+      <select id="fileSel" hidden></select>
+      <span id="fileStartBox" hidden>from <input id="fileStart" type="text" value="0:00" style="width:46px; font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px;"></span>
+      <span id="srcInfo" class="muted"></span></div>
+    <div id="objBox" hidden>
+      <div class="row"><span class="muted" style="width:62px">Object</span>
+        <select id="objSig"><option value="bursts">noise bursts</option><option value="noise">steady noise</option><option value="file">file (mono)</option></select>
+        x <input id="ox" type="number" step="0.1" value="0"> y <input id="oy" type="number" step="0.1" value="1.5">
+        z <input id="oz" type="number" step="0.1" value="0"></div>
+      <div class="row"><button id="objOrbit" title="circle the object around you">Orbit</button>
+        <span class="muted">radius</span><input id="orbitR" type="number" step="0.1" value="1.5">
+        <span class="muted">s / turn</span><input id="orbitT" type="number" step="1" value="12"></div>
+      <div class="muted">Drag the purple object in the top view, or click it in 3D and drag its arrows
+        (Shift+click the scan to put it on a surface). It is panned over the speakers (VBAP) as heard from
+        you in Follow, from the seat otherwise; the black arrow in the top view should point at it.</div>
+    </div>
+    <div class="ctl"><span class="muted">volume</span><input id="vol" type="range" min="-60" max="0" step="1" value="-12"><span class="ro" id="volV">-12 dB</span></div>
+    <table>
+      <thead><tr><th>Ch</th><th>dist</th><th>delay</th><th>level</th><th>treble</th><th>out</th></tr></thead>
+      <tbody id="dspRows"></tbody>
+    </table>
+    <div class="kv lat" id="latBox"></div>
+    <details style="margin-top:6px"><summary class="muted">Options &amp; input device</summary>
+      <div class="row"><label><input id="optLevel" type="checkbox" checked> level compensation</label>
+        <label><input id="optEq" type="checkbox" checked> off-axis treble</label>
+        <label><input id="optPredict" type="checkbox" checked> prediction</label>
+        <label title="virtual surround: the speakers stay put when you turn your head (camera yaw) - turning tells front from back"><input id="optYaw" type="checkbox" checked> head turning (virtual)</label></div>
+      <div class="row"><span class="muted">delay slew</span>
+        <select id="slewSel"><option value="0.001">0.1 % (smoothest)</option><option value="0.002">0.2 %</option>
+          <option value="0.005">0.5 %</option><option value="0.01">1 % (fastest)</option></select></div>
+      <div class="row"><span class="muted">input</span><select id="inSel" style="max-width:300px"></select></div>
+    </details>
+    <details style="margin-top:6px"><summary class="muted">Listening tests</summary>
+      <ul class="help">
+        <li><b>No 5.1 yet?</b> Output <i>Virtual surround</i> + headphones: the speakers are simulated at their
+          room positions as heard from where you are (tracked or manual), so every test below works the same.
+          No front/back cues - the surrounds sound to the sides.</li>
+        <li><b>1.1 static centering</b>: sit at the seat. <i>identify</i> - each speaker in turn, check name and wiring.
+          <i>center test</i>: toggle Bypass / Static - with Static the noise fuses into one image at your head.</li>
+        <li><b>2.1 shifting</b>: Listener Manual, set the spot you will sit at (e.g. x = +0.4), go sit there.
+          <i>phantom center</i>: Static pulls the image into the nearer speaker, Follow puts it back in front of you.</li>
+        <li><b>3.1 manual re-centering</b>: drag the target in the top view while listening - the image moves smoothly, no clicks.</li>
+        <li><b>3.2 live</b>: Listener Tracking + Follow, move around: the phantom center stays in front of you.</li>
+      </ul>
+    </details>
   </div>
 
   <div id="tab-speakers" class="tab">
@@ -232,7 +329,11 @@
 
 <div id="side">
   <div class="card"><h2><span>Camera</span><span id="camNote"></span></h2><img id="preview" alt="camera preview"></div>
-  <div class="card"><h2><span>Top view</span><span class="muted">front &uarr;</span></h2><canvas id="top"></canvas></div>
+  <div class="card" id="topCard"><h2><span>Top view</span><span class="muted">
+    <label title="sound from each speaker to you: thickness = level, pulses = timing (slowed down)"><input id="showRays" type="checkbox" checked> sound rays</label>
+    &middot; front &uarr; <button id="topWide" title="bigger top view" style="padding:0 6px">&#10530;</button></span></h2>
+    <canvas id="top"></canvas>
+    <div id="rayInfo" class="muted" style="font-size:11px; margin-top:4px"></div></div>
 </div>
 <script type="module" src="/app.js"></script>
 </body>

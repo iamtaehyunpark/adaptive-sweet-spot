@@ -23,3 +23,4 @@ config/room.json
 config/room_map.png
 config/room_cloud_*.bin
 config/camera.json
+config/audio.json

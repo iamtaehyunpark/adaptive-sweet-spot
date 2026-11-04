@@ -10,8 +10,8 @@ stays centered as the listener moves.
 | Module        | Role |
 |---------------|------|
 | `vision/`     | Webcam capture, BlazeFace detection, pixel → real-world offset conversion |
-| `interface/`  | Bridge passing live (vision) or manual offsets to the DSP engine |
-| `dsp/`        | 6-channel playback, per-channel delay/gain steering, artifact-free updates |
+| `interface/`  | Bridge passing live (vision) or manual offsets to the DSP engine; the web app |
+| `dsp/`        | 6-channel playback, per-channel delay/level/treble steering, artifact-free updates, virtual surround |
 | `config/`     | Speaker layout, camera pose, system settings |
 | `tools/`      | Per-milestone test scripts and calibration utilities |
 | `assets/`     | Test audio (`assets/audio/`) and model weights (`assets/models/`) |
@@ -36,13 +36,13 @@ stays centered as the listener moves.
 
 | Phase | Milestone | Description | Status |
 |-------|-----------|-------------|--------|
-| 1 | 1.1 | Static audio centering (6-ch playback, fixed speaker layout) | ☐ |
+| 1 | 1.1 | Static audio centering (6-ch playback, fixed speaker layout) | ◐ DSP + tests done; listening test pending (virtual surround until the Z906 is wired) |
 | 1 | 1.2 | BlazeFace validation on webcam feed | ◐ tooling done, live validation pending |
-| 2 | 2.1 | DSP sweet-spot shifting via delays + levels | ☐ |
+| 2 | 2.1 | DSP sweet-spot shifting via delays + levels | ◐ done + verified in simulation; listening test pending |
 | 2 | 2.2 | BlazeFace detections → real-world offsets | ◐ tooling done, live validation pending |
-| 3 | 3.1 | Manual re-centering interface | ☐ |
-| 3 | 3.2 | Vision → interface live pipeline | ◐ integrated app + UDP stream done; smoothing/prediction next |
-| 4 | 4.1 | QIDK deployment, end-to-end latency < 25 ms | ☐ |
+| 3 | 3.1 | Manual re-centering interface | ◐ Sound tab: manual listener (drag / type / arrows) |
+| 3 | 3.2 | Vision → interface live pipeline | ◐ app → UDP → DSP, One Euro smoothing + prediction |
+| 4 | 4.1 | QIDK deployment, end-to-end latency < 25 ms | ◐ latency instrumented (`tools/m4_1_latency.py`); board run pending |
 | 5 | 5.0 | Arbitrary layouts and head rotation | ☐ |
 | 6 | 6.0 | Automated speaker discovery / calibration | ☐ |
 
@@ -61,7 +61,8 @@ python tools/fetch_model.py        # BlazeFace weights -> assets/models/
 ```bash
 python tools/app.py            # camera from the config; opens http://127.0.0.1:8765/
 python tools/app.py --camera 1
-python tools/app.py --no-camera   # room / speakers only
+python tools/app.py --no-camera   # room / speakers / DSP with a manual listener
+python tools/app.py --no-dsp      # don't start the DSP process
 ```
 
 One page with everything:
@@ -75,6 +76,10 @@ One page with everything:
   scan; the page reloads the room when done. Tracking keeps running, and the tracking
   frames from the end of the countdown calibrate your face width exactly as tracking
   measures it.
+- **Sound** — the sweet-spot DSP: steering Bypass / Static / Follow, listener from tracking or
+  manual (drag in the top view), test signals / files / live input, output to the 5.1 DAC or
+  **virtual surround** over stereo, per-channel delay / level / treble / meters, latency
+  (details under *Sweet-spot DSP* below). The top view shows where the sound is centered.
 - **Suggest** — suggested 5.1 positions on the scan (below), applied with one click.
 - **Camera** — pick the camera from snapshots of every connected one (handy for a phone
   camera), choose its mode / fps, probe what the driver can adjust (zoom, focus, exposure)
@@ -123,6 +128,79 @@ References: [ITU-R BS.775 / Dolby angles](https://theatercalc.com/guides/surroun
 [subwoofer walls/corners](https://www.audioholics.com/easy-subwoofer-placement),
 [wall distance, tweeter height, toe-in](https://www.soundandvision.com/content/setup-speakers-page-3-0).
 
+## Sweet-spot DSP (`dsp/`, Milestones 1.1 / 2.1 / 3.1)
+
+Runs as its own process (`tools/dsp.py`, which the app starts) so audio never shares a
+process with vision. Listener positions come in on the UDP bridge; the app's **Sound** tab
+drives it over a local control port (`dsp/control.py`, UDP 9751).
+
+```
+source (test signal / file / live input)
+  -> fractional delay per channel (cubic Lagrange, slew-limited)      dsp/delay.py
+  -> off-axis treble shelf (fixed high-pass x ramped gain)             dsp/filters.py
+  -> level (inverse distance, ramped)                                  dsp/engine.py
+  -> 5.1 DAC  |  virtual surround (stereo)  |  stereo downmix          dsp/player.py, dsp/virtual.py
+     ^ targets from geometry: speaker positions (room.json) + listener dsp/geometry.py
+     ^ listener: bridge -> One Euro filter -> predicted to when heard  dsp/listener.py
+```
+
+| | |
+|---|---|
+| **Steering** | *Bypass* (raw, the reference) · *Static* (centered on the seat with the measured positions, 1.1) · *Follow* (centered on the listener, 2.1/3.2) |
+| **Time alignment** | delay per channel so all speakers arrive together at the listener. The arrival time is held constant (fixed reference distance), so moving causes no pitch change; delay changes are limited to 0.2 %/s of pitch (inaudible) and ramped per sample - no clicks, no zipper |
+| **Level** | inverse-distance: nearer speakers attenuated to match the farthest (never boosted); LFE gets delay only |
+| **Off-axis treble** | speakers assumed aimed at the seat; up to +3 dB high shelf (3 kHz) as you move off a speaker's axis |
+| **Listener input** | *Tracking* (bridge: One Euro smoothing, predicted ahead by the audio latency, held when the face is lost) or *Manual* (3.1: drag in the top view, type x/y/z, arrow keys) |
+| **Output** | *5.1 speakers* (6-ch DAC, channel order FL FR FC LFE SL SR) · *Virtual surround* (below) · *Downmix* |
+| **Position path** | bridge → One Euro filter (1.5 Hz floor, beta 6) → audio-rate smoothing (2 × 25 ms) → engine. The smoothing turns the 15–30 detections/s into a continuous path (no pitch "ticks" per update). Prediction is off by default: at these rates it overshoots when you stop (+~200 ms) |
+| **Sound object** | source *sound object*: one mono sound (bursts / noise / a file) placed anywhere - drag it in the top view or the 3D map, or *Orbit* it around you. 2D VBAP over the five mains, as heard from you (Follow) or the seat, so it keeps its direction when you move (`dsp/panner.py`) |
+| **Speakers** | the DSP uses the positions in the Speakers tab live (Save makes them permanent); FC is always at the camera |
+| **Cost** | ~0.11 ms per 128-sample block (4 % of real time), 0.25 ms with virtual surround (`tools/m4_1_latency.py bench`) |
+
+Delays + levels center the image *between the speakers as seen from where you are*. Far
+off the seat the speaker angles are no longer symmetric (40 cm right: FL −39°, FR +19°),
+so the phantom center sits midway between them (~10° left), not straight ahead - fixing
+that needs re-panning (Milestone 5.0).
+
+**Virtual surround (testing without 5.1)** - `dsp/virtual.py`, *Output → Virtual surround*
+(the default on a stereo device). Not a separate DSP: it runs after the same engine and
+simulates the room - each speaker's sound travels from its real position to your two ears
+(path delay, 1/d level, head shadow), with "you" at the tracked or manual position. So on
+headphones an off-center listener hears the image pulled into the nearer speaker under
+Bypass/Static, and Follow re-centers it - the same A/B as in the room. No pinna cues: front
+and back stay ambiguous with a still head (the "cone of confusion"); the camera's head yaw
+turns your virtual ears while the speakers stay put, so a small head turn tells front from
+back, and sound from behind gets a slight treble cut. Best with wired headphones.
+
+**Top view sound rays**: each speaker's ray to you is as thick as its level at your head;
+pulses wait at the speaker for the DSP delay, then fly at sound speed (60× slowed), so
+aligned = all arrive together. Arrival strip (ms after the first arrival) and an estimated
+image arrow (energy vector weighted by the precedence effect).
+
+**Test material**: `tools/validate_dsp.py` checks alignment, levels, virtual-surround
+directions, the phantom image and pitch offline. For listening, free 5.1 films work well:
+*Tears of Steel* (discrete 24-bit 5.1 stems at download.blender.org/demo/movies/ToS/surround,
+CC BY 3.0 / soundtrack CC BY-ND 3.0, (C) Joram Letwory) - join them with
+`ffmpeg -i L.aif -i R.aif -i C.aif -i LFE.aif -i Ls.aif -i Rs.aif -filter_complex
+"join=inputs=6:channel_layout=5.1(side)" -c:a flac assets/audio/tears_of_steel_5.1.flac`;
+the file source has a start time (strong surrounds at 0:15, 7:10, 9:45).
+
+**Listening tests** (Sound tab → *Listening tests*): *identify* (one speaker at a time),
+*center test* (correlated noise on all mains: fuses into one image when aligned),
+*phantom center* (FL + FR, the most position-sensitive), *clicks* (mic alignment), files
+from `assets/audio/` (6-ch WAV in FL FR FC LFE SL SR order; stereo → FL/FR) and *live input*
+(pass-through, e.g. BlackHole 16ch as the system output on macOS, `[dsp] input_device`).
+
+```bash
+python tools/dsp.py --list-devices
+python tools/dsp.py --device "USB" --source center    # headless (e.g. QIDK), no app needed
+```
+
+Latency (Milestone 4.1): the Sound tab shows camera → DSP, DSP → speaker (device latency
++ one block) and their sum against the 25 ms target; `python tools/m4_1_latency.py live`
+records them. Note: the MacBook's built-in speakers report a fixed ~25 ms output latency
+on their own - USB DACs are typically a few ms; measure on the real DAC.
+
 ### Vision → DSP bridge (UDP, message v1)
 
 One JSON object per datagram to `[bridge] udp_host:udp_port` (default `127.0.0.1:9750`),
@@ -147,7 +225,8 @@ rx = BridgeReceiver()          # binds 127.0.0.1:9750
 msg = rx.latest()              # newest ListenerMessage or None
 ```
 
-Positions are raw per-detection (±2–4 cm jitter); smoothing/prediction is the next step.
+Positions are raw per-detection (±2–4 cm jitter); the DSP smooths and predicts them
+(`dsp/listener.py`).
 
 ## Milestone 1.2 — BlazeFace validation
 
