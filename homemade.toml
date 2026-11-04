@@ -1,0 +1,53 @@
+[app]
+id = "ass-web"
+name = "Adaptive Sweet Spot"
+version = "0.1.0"
+description = "Real-time spatial audio system with adaptive 5.1 sweet-spot steering"
+mode = "webapp"
+exec = "python3 tools/app.py --port 8765"
+cwd = "."
+env_manager = "uv"
+
+[ui]
+default_layout = "tab"
+
+[resources]
+requires_gpu = false
+isolated_cache = false
+graceful_timeout_ms = 3000
+kill_timeout_ms = 2000
+
+[environment]
+secrets = []
+
+[environment.vars]
+HOME = "/Users/t/github/adaptive-sweet-spot"
+TMPDIR = "/tmp"
+
+[artifacts]
+output_dir = "./outputs"
+scratch_globs = []
+
+[inputs.camera]
+type = "string"
+cli_flag = "--camera"
+label = "Camera index"
+description = "Select camera device"
+required = false
+default = "0"
+
+[inputs.dsp]
+type = "string"
+cli_flag = "--dsp"
+label = "DSP mode"
+description = "Activate DSP subsystem"
+required = false
+default = "auto"
+
+[inputs.no_camera]
+type = "string"
+cli_flag = "--no-camera"
+label = "Disable camera"
+description = "Run without live camera feed"
+required = false
+default = "false"
