@@ -15,6 +15,14 @@ vision = ["mediapipe>=0.10", "opencv-python>=4.8",
           "pyobjc-framework-AVFoundation; sys_platform == 'darwin'"]  # camera names on macOS
 dev = ["pytest>=8"]
 
+[dependency-groups]
+# `uv sync` installs these by default (see tool.uv) so `uv run tools/app.py` has camera + audio
+hardware = ["adaptive-sweet-spot[audio,vision]"]
+dev = ["pytest>=8"]
+
+[tool.uv]
+default-groups = ["hardware", "dev"]
+
 [tool.setuptools]
 packages = ["config", "dsp", "vision", "interface"]
 

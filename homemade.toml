@@ -4,7 +4,7 @@ name = "Adaptive Sweet Spot"
 version = "0.1.0"
 description = "Real-time spatial audio system with adaptive 5.1 sweet-spot steering"
 mode = "webapp"
-exec = "python3 tools/app.py --port 8765"
+exec = "python tools/app.py --port 8765 --no-browser"
 cwd = "."
 env_manager = "uv"
 
@@ -21,8 +21,6 @@ kill_timeout_ms = 2000
 secrets = []
 
 [environment.vars]
-HOME = "/Users/t/github/adaptive-sweet-spot"
-TMPDIR = "/tmp"
 
 [artifacts]
 output_dir = "./outputs"
@@ -32,22 +30,36 @@ scratch_globs = []
 type = "string"
 cli_flag = "--camera"
 label = "Camera index"
-description = "Select camera device"
+description = "Camera device index (empty = from config)"
 required = false
-default = "0"
-
-[inputs.dsp]
-type = "string"
-cli_flag = "--dsp"
-label = "DSP mode"
-description = "Activate DSP subsystem"
-required = false
-default = "auto"
 
 [inputs.no_camera]
-type = "string"
+type = "bool"
 cli_flag = "--no-camera"
+bool_style = "flag_only"
 label = "Disable camera"
-description = "Run without live camera feed"
+description = "No tracking, only the 3D room / speaker placement"
+default = false
+
+[inputs.no_dsp]
+type = "bool"
+cli_flag = "--no-dsp"
+bool_style = "flag_only"
+label = "Disable DSP"
+description = "Don't start the sweet-spot DSP process"
+default = false
+
+[inputs.no_stream]
+type = "bool"
+cli_flag = "--no-stream"
+bool_style = "flag_only"
+label = "Disable UDP bridge"
+description = "Don't publish detections on the UDP bridge"
+default = false
+
+[inputs.audio_device]
+type = "string"
+cli_flag = "--audio-device"
+label = "Audio device"
+description = "DSP output device (index or name substring; empty = default)"
 required = false
-default = "false"

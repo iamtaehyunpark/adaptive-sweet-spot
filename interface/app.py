@@ -612,6 +612,7 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
     server.daemon_threads = True
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"app: {url}  (Ctrl-C to quit)")
+    print(f"@homemade:port {server.server_address[1]}", flush=True)  # tells the Homemade launcher where to look
     if open_browser:
         webbrowser.open(url)
     try:

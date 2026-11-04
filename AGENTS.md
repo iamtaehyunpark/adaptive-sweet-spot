@@ -1,8 +1,8 @@
 <!-- homemade:start -->
 ## Homemade
 
-This folder is registered in **Homemade** (the personal-software launcher) as app `ass-web` — mode `webapp`, exec `python3 tools/app.py --port 8765`.
-The manifest is `homemade.toml` (keep it in sync with any CLI argument you add or change; declared inputs: camera (string), dsp (string), no_camera (string)).
+This folder is registered in **Homemade** (the personal-software launcher) as app `ass-web` — mode `webapp`, exec `python tools/app.py --port 8765 --no-browser`.
+The manifest is `homemade.toml` (keep it in sync with any CLI argument you add or change; declared inputs: camera (string), no_camera (bool), no_dsp (bool), no_stream (bool), audio_device (string)).
 Follow the `homemade` skill (`/Users/t/.homemade/skills/homemade/SKILL.md`) for conventions: uv, `$HOMEMADE_OUTPUT_DIR`, `@homemade:progress` / `@homemade:artifact`.
 
 You can drive the launcher yourself instead of asking the user to click Run:

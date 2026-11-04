@@ -19,6 +19,7 @@ wheels = [
 name = "adaptive-sweet-spot"
 version = "0.1.0"
 source = { editable = "." }
+default-groups = ["dev", "hardware"]
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -40,6 +41,14 @@ vision = [
     { name = "pyobjc-framework-avfoundation", marker = "sys_platform == 'darwin'" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+hardware = [
+    { name = "adaptive-sweet-spot", extra = ["audio", "vision"] },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "mediapipe", marker = "extra == 'vision'", specifier = ">=0.10" },
@@ -52,6 +61,10 @@ requires-dist = [
     { name = "soundfile", marker = "extra == 'audio'", specifier = ">=0.12" },
 ]
 provides-extras = ["audio", "vision", "dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+hardware = [{ name = "adaptive-sweet-spot", extras = ["audio", "vision"] }]
 
 [[package]]
 name = "certifi"
