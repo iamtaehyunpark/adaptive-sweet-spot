@@ -8,6 +8,10 @@ from dataclasses import dataclass
 import numpy as np
 
 
+MIN_FACE_ABOVE_FLOOR_M = 0.5  # a seated/standing face is ~1.1-1.7 m above the floor
+MAX_CAMERA_TILT_DEG = 40.0    # the camera sits on the FC speaker facing the listener: near level
+
+
 @dataclass
 class FloorPlane:
     up: np.ndarray        # unit normal pointing from the floor toward the camera (camera frame)
@@ -26,19 +30,25 @@ class FloorPlane:
         return math.degrees(math.asin(float(np.clip(self.up[0], -1, 1))))
 
 
-def fit_floor(points: np.ndarray, max_tilt_deg: float = 60.0, iterations: int = 500,
-              tolerance: float = 0.015, seed: int = 0) -> FloorPlane | None:
+def fit_floor(points: np.ndarray, max_tilt_deg: float = MAX_CAMERA_TILT_DEG, iterations: int = 500,
+              tolerance: float = 0.015, seed: int = 0, exclude: np.ndarray | None = None,
+              above: np.ndarray | None = None, min_below_m: float = MIN_FACE_ABOVE_FLOOR_M) -> FloorPlane | None:
     """RANSAC plane fit to the floor, searched in the lower half of the image.
 
     ``tolerance`` is relative to each point's distance (depth error grows with range),
     so it also works at any (uncorrected) scale.
     Planes whose normal is more than ``max_tilt_deg`` away from the camera's down axis are
-    rejected (walls, screens).
+    rejected (walls, screens, a reclined torso, planes slicing across walls). ``exclude`` masks pixels that are not floor (the listener's
+    body: a big, often reclined surface in the lower half). With ``above`` (the face point),
+    only planes at least ``min_below_m`` below it count - not a lap, a desk or a chair seat.
     """
     h, w = points.shape[:2]
     valid = np.isfinite(points).all(axis=2)
     rows = np.arange(h)[:, None].repeat(w, axis=1)
-    lower = points[valid & (rows > h // 2)]
+    cand = valid & (rows > h // 2)
+    if exclude is not None:
+        cand &= ~exclude
+    lower = points[cand]
     if len(lower) < 100:
         return None
     sample = lower[np.random.default_rng(seed).choice(len(lower), min(len(lower), 20000), replace=False)]
@@ -55,6 +65,8 @@ def fit_floor(points: np.ndarray, max_tilt_deg: float = 60.0, iterations: int = 
             continue
         n /= norm
         if abs(n[1]) < min_up:  # camera y axis points down; floor normal must be close to it
+            continue
+        if above is not None and abs((above - a) @ n) < min_below_m:
             continue
         count = int((np.abs((sample - a) @ n) < thresh).sum())
         if count > best_count:
@@ -74,6 +86,8 @@ def fit_floor(points: np.ndarray, max_tilt_deg: float = 60.0, iterations: int = 
         d = -float(n @ centroid)
     if d < 0:  # orient the normal toward the camera (origin above the floor)
         n, d = -n, -d
+    if above is not None and above @ n + d < min_below_m:
+        return None  # refinement slid onto something that is not the floor
 
     full = np.full((h, w), False)
     pv = points[valid]
@@ -93,6 +107,7 @@ def fit_floor(points: np.ndarray, max_tilt_deg: float = 60.0, iterations: int = 
 # ---------------------------------------------------------------------------
 
 FLOOR_BAND_M = 0.05        # within this of the floor plane = floor
+BODY_WIDTHS = 2.5          # listener's body: face center +- this many face widths, face down
 EDGE_REL = 0.03            # depth jump to a neighbour (relative) that marks a flying pixel
 MAX_RANGE_M = 8.0          # drop points farther than this from the camera
 OBSTACLE_BAND_M = (0.10, 2.20)  # heights above the floor drawn as obstacles
@@ -150,6 +165,16 @@ def flying_pixel_mask(points: np.ndarray, rel: float = EDGE_REL) -> np.ndarray:
     return jump
 
 
+def body_mask(shape: tuple[int, int], bbox: np.ndarray) -> np.ndarray:
+    """Pixels of the listener's body: a column under the face down to the image bottom."""
+    x, y, w, _ = bbox
+    cx = x + w / 2
+    mask = np.zeros(shape, bool)
+    x0, x1 = int(max(cx - BODY_WIDTHS * w, 0)), int(min(cx + BODY_WIDTHS * w, shape[1]))
+    mask[int(max(y, 0)):, x0:x1] = True
+    return mask
+
+
 def face_point(points: np.ndarray, bbox: np.ndarray) -> np.ndarray:
     """Median camera-frame point over the inner half of the face box."""
     x, y, w, h = bbox
@@ -172,8 +197,8 @@ def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float
     is the (H, W, 3) RGB image the points came from. Flying pixels and points
     beyond MAX_RANGE_M are removed.
     """
-    floor = fit_floor(points)
     face = face_point(points, face_bbox)
+    floor = fit_floor(points, exclude=body_mask(points.shape[:2], face_bbox), above=face)
     scale, source = 1.0, "model"
     if seat_distance_m:
         scale, source = seat_distance_m / float(np.linalg.norm(face)), "seat distance tape"

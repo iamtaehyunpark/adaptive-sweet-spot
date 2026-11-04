@@ -49,15 +49,15 @@ def room_with_face(height=1.0, pitch_deg=-15.0, face_cam=(0.2, -0.1, 2.0), w=320
 def test_room_frame_puts_seat_at_origin_and_camera_in_front():
     from vision.room import build_room
 
-    pts, box = room_with_face(height=1.0, pitch_deg=-15.0, face_cam=(0.0, 0.0, 2.0))
+    pts, box = room_with_face(height=1.2, pitch_deg=-15.0, face_cam=(0.0, 0.0, 2.0))
     room = build_room(pts, box, stride=1)
     p = math.radians(-15.0)
     # face on the optical axis 2 m out; camera pitched down 15 deg
     assert room.center_distance_m == pytest.approx(2.0 * math.cos(p), rel=0.01)
     assert room.camera_xy[0] == pytest.approx(0.0, abs=0.01)
     assert room.camera_xy[1] == pytest.approx(2.0 * math.cos(p), rel=0.01)  # camera is toward +y (front)
-    assert room.camera_height_m == pytest.approx(1.0, rel=0.01)
-    assert room.face_height_m == pytest.approx(1.0 + 2.0 * math.sin(p), abs=0.02)
+    assert room.camera_height_m == pytest.approx(1.2, rel=0.01)
+    assert room.face_height_m == pytest.approx(1.2 + 2.0 * math.sin(p), abs=0.02)
     assert room.pitch_deg == pytest.approx(-15.0, abs=0.5)
 
 
@@ -108,6 +108,25 @@ def test_flying_pixels_at_depth_edges_are_removed():
     assert not mask[0, 0] and not mask[20, 20]  # flat wall and box interior kept
 
 
+
+
+def test_floor_ignores_the_listeners_body():
+    from vision.room import build_room
+
+    # camera 0.9 m up, looking 5 deg down; a reclined torso (35 deg from vertical) fills the
+    # middle of the lower image - it must not be taken for the floor
+    h, w = 240, 320
+    pts = synthetic_room(0.9, -5.0, w, h)
+    box = np.array([w / 2 - 15, 70, 30, 30])
+    face = np.array([0.0, -0.1, 1.2])
+    pts[70:100, 145:175] = face
+    t = math.radians(35)
+    for v in range(100, h):  # torso surface below the face, leaning back
+        s = (v - 100) / (h - 100) * 0.8
+        pts[v, 110:210] = face + np.array([0, s * math.cos(t), s * math.sin(t)])
+    room = build_room(pts, box, stride=1)
+    assert room.pitch_deg == pytest.approx(-5.0, abs=1.0)
+    assert room.camera_height_m == pytest.approx(0.9, rel=0.03)
 
 
 def test_render_map_with_no_points_near_the_seat():
