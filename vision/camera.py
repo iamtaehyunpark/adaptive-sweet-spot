@@ -42,6 +42,28 @@ class CameraInfo:
     height: int
 
 
+def camera_access_denied() -> str | None:
+    """Why the OS won't give us the camera, or None if it might.
+
+    Only macOS checks this: there the app that launched us (Terminal, a launcher, ...)
+    must hold the Camera privacy permission, and touching the camera without it can
+    abort the whole process. Reading the status never prompts or crashes.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        from AVFoundation import AVCaptureDevice, AVMediaTypeVideo
+
+        status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeVideo)
+    except Exception:
+        return None
+    if status == 3:  # authorized
+        return None
+    what = {0: "not yet granted", 1: "restricted", 2: "denied"}.get(status, f"status {status}")
+    return (f"camera access {what} for the app that launched this program - allow it in "
+            "System Settings > Privacy & Security > Camera (or run from a Terminal that has it)")
+
+
 def mac_devices() -> list[dict] | None:
     """macOS video devices in OpenCV's index order (AVFoundation), or None elsewhere.
 

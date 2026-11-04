@@ -60,6 +60,13 @@ def main() -> int:
     dsp.start()
     tracker = None
     if not args.no_camera:
+        from vision.camera import camera_access_denied
+
+        reason = camera_access_denied()
+        if reason:
+            print(f"camera: {reason}; running without tracking", flush=True)
+            args.no_camera = True
+    if not args.no_camera:
         tracker = LiveTracker(cfg, args.camera, publish=not args.no_stream)
         tracker.start()
     try:
