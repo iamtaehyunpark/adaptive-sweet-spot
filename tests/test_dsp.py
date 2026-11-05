@@ -289,3 +289,35 @@ def test_virtual_rear_sources_are_duller():
     _, _, shelf = VirtualSurround(lay, FS, channels=2, offaxis_db=0.0)._targets((0, 0, 0))
     assert shelf[0] == shelf[1] == 0                       # front: no cut
     assert shelf[2] == pytest.approx(REAR_DB) and shelf[3] == pytest.approx(REAR_DB)  # behind: both ears
+
+
+def test_follow_carries_the_object_with_the_listener():
+    from types import SimpleNamespace
+
+    from dsp.panner import vbap_gains
+    from dsp.player import Player
+
+    lay = Layout.from_config(SPEAKERS)
+    placed = np.array([0.0, 1.5, 0.0])  # 1.5 m ahead of the seat
+    you = np.array([0.6, -0.3, 0.0])
+
+    def heard(mode, yaw=0.0, obj=placed):
+        stub = SimpleNamespace(engine=SimpleNamespace(mode=mode, listener=you, layout=lay), object_pos=obj,
+                               head_yaw_deg=yaw)
+        return Player.object_heard(stub)
+
+    # Follow: same offset from you as from the seat -> straight ahead of you, same distance
+    assert np.allclose(heard("tracking"), you + placed)
+    g = vbap_gains(lay, you, heard("tracking"))
+    dirs = np.array([math.atan2(*(p[:2] - you[:2])) for p in lay.positions])
+    e = np.array([(g ** 2 * np.sin(dirs)).sum(), (g ** 2 * np.cos(dirs)).sum()])
+    assert math.atan2(*e) == pytest.approx(0.0, abs=math.radians(8))
+    # Static / Bypass: the object stays where it was placed
+    assert np.allclose(heard("static"), placed) and np.allclose(heard("bypass"), placed)
+
+    # ... and turns with the head: placed ahead stays in front of the face
+    turned = heard("tracking", yaw=90.0)          # turned right: "ahead" is now room +x
+    assert np.allclose(turned, you + [1.5, 0, 0], atol=1e-9)
+    right = heard("tracking", yaw=90.0, obj=np.array([1.0, 0.0, 0.2]))  # placed to the right
+    assert np.allclose(right, you + [0, -1.0, 0.2], atol=1e-9)       # -> behind in the room
+    assert np.allclose(heard("static", yaw=90.0), placed)            # Static ignores the head

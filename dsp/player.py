@@ -15,6 +15,7 @@ Render (what reaches the device):
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -73,6 +74,19 @@ def find_device(name: str | int | None, kind: str) -> int | None:
     raise ValueError(f"no {kind} device matching {name!r}")
 
 
+
+def head_to_room(offset, yaw_deg: float) -> np.ndarray:
+    """Turn an offset in the listener's head frame (x right, y facing) into the room frame.
+
+    ``yaw_deg``: + = head turned right (clockwise from above), as on the bridge.
+    """
+    yaw = math.radians(yaw_deg)
+    facing = np.array([math.sin(yaw), math.cos(yaw)])
+    right = np.array([math.cos(yaw), -math.sin(yaw)])
+    o = np.asarray(offset, dtype=float)
+    xy = o[0] * right + o[1] * facing
+    return np.array([xy[0], xy[1], o[2]])
+
 class Player:
     def __init__(self, cfg: dict, receiver=None):
         self.cfg = cfg
@@ -106,7 +120,9 @@ class Player:
         self.out_latency_s = 0.0
         self.manual = False
         self.manual_pos: np.ndarray | None = None
-        self.object_pos = np.array([0.0, 1.5, 0.0])  # sound object (source "object"), room frame
+        # sound object (source "object"): placed relative to the seat, facing front (room
+        # frame). In Follow the whole scene moves and turns with the listener's head.
+        self.object_pos = np.array([0.0, 1.5, 0.0])
         self.object_signal = "bursts"
         # audio-rate position smoothing (two cascaded one-pole stages): positions arrive
         # in steps (5-30 per second, manual drags too); stepping the delays makes a tiny
@@ -115,6 +131,7 @@ class Player:
         self._s1: np.ndarray | None = None
         self._s2: np.ndarray | None = None
         self.yaw_deg = 0.0        # smoothed head yaw (virtual surround only; the steering ignores it)
+        self.head_yaw_deg = 0.0   # smoothed head yaw that turns the sound scene in Follow (0 = front)
         self._yaw_target = 0.0
 
     def _make_engine(self, fs: int) -> SteeringEngine:
@@ -357,13 +374,29 @@ class Player:
         yaw_target = 0.0 if self.manual or not self.dcfg.get("virtual_yaw", True) else self._yaw_target
         a_yaw = 1.0 - np.exp(-self.block / (YAW_TAU_S * self.engine.fs))  # yaw is noisier: smooth more
         self.yaw_deg += a_yaw * (yaw_target - self.yaw_deg)
+        head_target = 0.0 if self.manual else self._yaw_target
+        self.head_yaw_deg += a_yaw * (head_target - self.head_yaw_deg)
+
+    def object_heard(self) -> np.ndarray:
+        """Where the sound object is rendered, room frame.
+
+        Its placement is relative to the seat (the sweet-spot center), facing front. Follow
+        carries the sweet spot - and so the whole sound scene - with the listener: the object
+        keeps its offset from you and turns with your head (placed 1.5 m ahead = 1.5 m in
+        front of your face, wherever you sit and wherever you look). Static / Bypass keep it
+        where it was placed.
+        """
+        eng = self.engine
+        if eng.mode != "tracking":
+            return self.object_pos.copy()
+        return eng.listener + head_to_room(self.object_pos - SEAT, self.head_yaw_deg)
 
     def object_gains(self) -> np.ndarray:
         """Channel gains for the sound object, panned as heard from the listener (Follow)
         or the seat (Static / Bypass)."""
         eng = self.engine
         ref = eng.listener if eng.mode == "tracking" else SEAT
-        g = vbap_gains(eng.layout, ref, self.object_pos)
+        g = vbap_gains(eng.layout, ref, self.object_heard())
         out = np.zeros(CHANNELS)
         out[eng.layout.channels] = g
         return out
@@ -392,6 +425,8 @@ class Player:
             "slew": self.dcfg.get("slew", 0.002),
             "manual": self.manual,
             "object": [round(float(v), 3) for v in self.object_pos], "object_signal": self.object_signal,
+            "object_heard": [round(float(v), 3) for v in self.object_heard()],
+            "head_yaw_deg": round(self.head_yaw_deg, 1),
             "bridge": {"tracking": self.filter.tracking, "rate": self.msg_rate,
                        "age_ms": self.msg_age_ms if recent else None},
             "latency": {"output_ms": out_ms, "block_ms": block_ms,

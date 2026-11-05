@@ -195,7 +195,7 @@ const transform = new TransformControls(camera, renderer.domElement);
 transform.setSize(0.8);
 transform.addEventListener('dragging-changed', (e) => { orbit.enabled = !e.value; });
 transform.addEventListener('objectChange', () => {
-  if (selected === 'SRC') { setObject(toRoom(objMesh.position)); return; }
+  if (selected === 'SRC') { setObject(placedPos(toRoom(objMesh.position))); return; }
   const s = speakers.find((sp) => sp.name === selected);
   if (!s) return;
   s.position = toRoom(transform.object.position).map((v) => Math.round(v * 1000) / 1000);
@@ -465,7 +465,8 @@ function drawTop() {
     tctx.fillText(dspState.manual ? 'sound center (manual)' : 'sound center', tx + 12, ty - 8);
   }
   if (objectActive()) {
-    const [ox2, oy2] = P(objectPos[0], objectPos[1]);
+    const h = heardPos();
+    const [ox2, oy2] = P(h[0], h[1]);
     objScreen = [ox2, oy2];
     const ref = dspState.mode === 'tracking' ? dspState.listener : [0, 0];
     const [rx, ry] = P(ref[0], ref[1]);
@@ -967,7 +968,8 @@ let objDrag = false;
 const objPoint = (e) => {
   const r = topCanvas.getBoundingClientRect();
   const [x, y] = topToRoom(e.clientX - r.left, e.clientY - r.top);
-  setObject([x, y, objectPos[2]], e.type !== 'pointermove');
+  const p = placedPos([x, y, heardPos()[2]]);
+  setObject(p, e.type !== 'pointermove');
 };
 topCanvas.addEventListener('pointerdown', (e) => {
   if (!topToRoom) return;
@@ -1004,11 +1006,25 @@ objMesh.add(objLabel);
 objMesh.visible = false;
 scene.add(objMesh);
 const objectActive = () => dspState?.source === 'object';
+// The object is placed relative to the seat, facing front; Follow carries it with the
+// listener and turns it with their head (+ yaw = turned right), so the marker shows
+// where it is heard. placedPos is the inverse (drags happen where it is heard).
+const followPose = () => (dspState?.mode === 'tracking' && dspState.listener
+  ? { p: dspState.listener, yaw: ((dspState.head_yaw_deg ?? 0) * Math.PI) / 180 } : { p: [0, 0, 0], yaw: 0 });
+const heardPos = (o = objectPos) => {
+  const { p, yaw } = followPose(); const c = Math.cos(yaw), s = Math.sin(yaw);
+  return [p[0] + o[0] * c + o[1] * s, p[1] - o[0] * s + o[1] * c, p[2] + o[2]];
+};
+const placedPos = (h) => {
+  const { p, yaw } = followPose(); const c = Math.cos(yaw), s = Math.sin(yaw);
+  const dx = h[0] - p[0], dy = h[1] - p[1];
+  return [dx * c - dy * s, dx * s + dy * c, h[2] - p[2]];
+};
 
 function setObject(p, force = false) {
   objectPos = p.map((v) => Math.round(v * 1000) / 1000);
   ['ox', 'oy', 'oz'].forEach((id, k) => { if (document.activeElement !== $(id)) $(id).value = objectPos[k].toFixed(2); });
-  if (!(transform.dragging && selected === 'SRC')) objMesh.position.copy(toThree(objectPos));
+  if (!(transform.dragging && selected === 'SRC')) objMesh.position.copy(toThree(heardPos()));
   const now = performance.now();
   if (force || now - objSendT > 30) { objSendT = now; dsp({ object: objectPos }); }
 }
@@ -1027,13 +1043,11 @@ $('objOrbit').addEventListener('click', () => {
   if (orbitTimer) { stopOrbit(); return; }
   $('objOrbit').classList.add('on');
   const start = performance.now();
-  const ref0 = dspState?.mode === 'tracking' ? dspState.listener : [0, 0, 0];
-  const a0 = Math.atan2(objectPos[0] - ref0[0], objectPos[1] - ref0[1]);
+  const a0 = Math.atan2(objectPos[0], objectPos[1]);  // around the seat; Follow carries it around you
   orbitTimer = setInterval(() => {
-    const ref = dspState?.mode === 'tracking' ? dspState.listener : [0, 0, 0];
     const r = parseFloat($('orbitR').value) || 1.5;
     const a = a0 + ((performance.now() - start) / 1000 / (parseFloat($('orbitT').value) || 12)) * 2 * Math.PI;
-    setObject([ref[0] + r * Math.sin(a), ref[1] + r * Math.cos(a), objectPos[2]]);
+    setObject([r * Math.sin(a), r * Math.cos(a), objectPos[2]]);
   }, 33);
 });
 
@@ -1044,9 +1058,9 @@ function updateObject(d) {
   if (!on) { if (orbitTimer) stopOrbit(); if (selected === 'SRC') select(null); return; }
   if (document.activeElement !== $('objSig')) $('objSig').value = d.object_signal;
   const dragging = objDrag || orbitTimer || (transform.dragging && selected === 'SRC') || performance.now() - objSendT < 500;
+  if (!dragging && d.object) objectPos = [...d.object];
+  if (!(transform.dragging && selected === 'SRC')) objMesh.position.copy(toThree(heardPos()));
   if (!dragging && d.object) {
-    objectPos = [...d.object];
-    objMesh.position.copy(toThree(objectPos));
     ['ox', 'oy', 'oz'].forEach((id, k) => { if (document.activeElement !== $(id)) $(id).value = objectPos[k].toFixed(2); });
   }
 }
@@ -1063,7 +1077,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   raycaster.setFromCamera(pointer, camera);
   if (e.shiftKey && selected === 'SRC' && cloud) {
     const hit = raycaster.intersectObject(cloud)[0];
-    if (hit) setObject(toRoom(hit.point), true);
+    if (hit) setObject(placedPos(toRoom(hit.point)), true);
     return;
   }
   if (e.shiftKey && selected && !FIXED.has(selected) && cloud) {
