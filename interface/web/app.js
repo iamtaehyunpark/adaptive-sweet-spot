@@ -150,6 +150,8 @@ function renderRoomInfo() {
     } else {
       rows.push(['floor', 'not visible (level camera assumed)']);
     }
+    rows.push(['room scan', room.room_scan
+      ? `${room.room_scan.created} (${Math.round(room.room_scan.agreement * 100)}% match)` : 'none - from the setup capture']);
   } else {
     rows.push(['room', 'no setup yet']);
   }
@@ -323,11 +325,14 @@ function updateSetup(st, version) {
   pill.textContent = st.stage;
   pill.className = `pill ${st.stage === 'done' ? 'ok' : st.stage === 'error' ? 'bad' : st.stage === 'idle' ? 'idle' : 'ok'}`;
   $('setupMsg').textContent = st.message ?? '';
-  $('runSetup').disabled = !['idle', 'done', 'error'].includes(st.stage);
+  const idle = ['idle', 'done', 'error'].includes(st.stage);
+  $('runSetup').disabled = !idle;
+  $('runRoomScan').disabled = !idle || !room?.ready;
   const log = $('setupLog');
   log.hidden = !(st.log && st.log.length);
   log.textContent = (st.log ?? []).join('\n');
-  $('camNote').textContent = st.stage === 'countdown' ? `setup in ${Math.ceil(st.remaining ?? 0)} s`
+  $('camNote').textContent = st.stage === 'countdown'
+    ? `${st.kind === 'room' ? 'room scan' : 'setup'} in ${Math.ceil(st.remaining ?? 0)} s`
     : st.stage === 'capturing' ? 'capturing...' : '';
 }
 
@@ -347,10 +352,12 @@ const preview = $('preview');
 preview.src = '/api/video.mjpg';
 preview.onerror = () => { $('camNote').textContent = 'no camera'; };
 
-$('runSetup').addEventListener('click', async () => {
-  const r = await fetch('/api/setup', { method: 'POST' });
-  if (!r.ok) $('setupMsg').textContent = 'setup already running (or no camera)';
-});
+async function startSetup(kind) {
+  const r = await fetch('/api/setup', { method: 'POST', body: JSON.stringify({ kind }) });
+  if (!r.ok) $('setupMsg').textContent = (await r.json().catch(() => ({}))).error || 'setup already running (or no camera)';
+}
+$('runSetup').addEventListener('click', () => startSetup('calibration'));
+$('runRoomScan').addEventListener('click', () => startSetup('room'));
 
 // ---------------------------------------------------------------- top view (2D)
 const topCanvas = $('top');

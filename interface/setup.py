@@ -1,5 +1,14 @@
 """Room setup pipeline (Milestone 3.2b): depth -> calibration -> 3D scan -> room.json.
 
+Two captures from the same fixed camera:
+
+* calibration (build)            listener at the seat facing the camera - required.
+  Gives the scale, the room frame (origin at the face), the face width and a first scan.
+* room scan (apply_room_scan)    the empty room, nobody in view - optional, after the
+  calibration. Its depth is aligned to the calibration capture and replaces the scan,
+  floor and map (no listener hiding the floor and what is behind them). The calibration
+  itself (face width, seat distance, FOV) is unchanged.
+
 Shared by tools/room_setup.py (CLI) and the live app (tools/app.py).
 """
 
@@ -142,17 +151,110 @@ def build(capture: Path, vcfg: dict, seat_distance: float | None = None, camera_
         "face_height_m": room.face_height_m,
         "floor_z": room.floor_z,
         "map": {"image": MAP_FILE.name, **meta},
+        "face_bbox_px": [float(v) for v in face_full.bbox],  # in the capture, for the room scan
         "speakers": [],
     }
-    # speakers: FC goes to the (possibly moved) camera; ones the user placed by hand are
-    # kept; the rest get this room's defaults (old defaults belong to the old room frame)
-    placed = {s["name"]: s for s in previous.get("speakers", []) if s.get("placed") and s["name"] != "FC"}
+    data["speakers"] = _speakers(data, previous)
+    ROOM_FILE.write_text(json.dumps(data, indent=2))
+
+    # a room scan from before still fits if the camera has not moved: re-apply it
+    old_scan = (previous.get("room_scan") or {}).get("capture")
+    if old_scan and Path(old_scan).exists():
+        try:
+            data = apply_room_scan(Path(old_scan), vcfg, log, tracking_size)
+        except SetupError as e:
+            log(f"previous room scan dropped: {str(e).splitlines()[0]}")
+    return data
+
+
+def _speakers(data: dict, previous: dict) -> list[dict]:
+    """FC goes to the (possibly moved) camera; ones the user placed by hand are kept; the
+    rest get this room's defaults (old defaults belong to the old room frame)."""
     from config import load_config
 
+    placed = {s["name"]: s for s in previous.get("speakers", []) if s.get("placed") and s["name"] != "FC"}
     cfg_speakers = load_config(room=False)["speakers"]
-    data["speakers"] = [placed.get(s["name"], s) for s in default_speakers(data, cfg_speakers)]
-    ROOM_FILE.write_text(json.dumps(data, indent=2))
-    return data
+    return [placed.get(s["name"], s) for s in default_speakers(data, cfg_speakers)]
+
+
+def apply_room_scan(capture: Path, vcfg: dict, log: Callable[[str], None] = print,
+                    tracking_size: tuple[int, int] | None = None) -> dict:
+    """Rebuild the 3D scan, floor and map from an empty-room capture; returns room.json.
+
+    Needs the calibration (build) first, from the same camera pose. The scan depth is
+    scaled to the calibration capture's depth (median ratio over static pixels, the
+    listener masked out) and re-projected with its intrinsics, so it lands in the same
+    room frame with the same scale; the calibration's face point stays the origin.
+    """
+    import cv2
+
+    from vision.room import (SCAN_MIN_AGREE, align_scan, body_mask, build_room, face_point,
+                             points_from_depth, render_map)
+
+    room = load_room()
+    if room is None or not room.get("capture"):
+        raise SetupError("run the calibration (Run setup) first - the room scan adds on to it")
+    cal_capture = Path(room["capture"])
+    if not (cal_capture / "moge2.npz").exists():
+        raise SetupError(f"calibration capture {cal_capture} is missing - run Setup again")
+
+    # nobody may be in view (checked before the slow depth model)
+    try:
+        detect_face(capture, vcfg, tracking_size)
+    except SetupError as e:
+        if "no face" not in str(e):
+            raise
+    else:
+        raise SetupError("a face is in the room scan - step out of the camera view and retry")
+
+    cal = np.load(cal_capture / "moge2.npz")
+    scan = np.load(run_depth(capture, log))
+    if "face_bbox_px" in room:
+        bbox = np.array(room["face_bbox_px"])
+    else:  # room.json from before the room scan existed
+        bbox = detect_face(cal_capture, vcfg, tracking_size)[1].bbox
+    try:
+        ratio, agree = align_scan(cal["depth"], scan["depth"], body_mask(cal["depth"].shape, bbox))
+    except ValueError as e:
+        raise SetupError(f"room scan does not match the calibration: {e}") from None
+    log(f"room scan: depth x{ratio:.3f} to the calibration, {agree * 100:.0f}% of the view agrees")
+    if agree < SCAN_MIN_AGREE:
+        raise SetupError(f"room scan does not match the calibration ({agree * 100:.0f}% agree) - "
+                         "the camera or its view moved: run Setup (calibration) again")
+
+    points = points_from_depth(scan["depth"] * ratio, float(cal["fx"]), float(cal["fy"]))
+    face = face_point(cal["points"], bbox)
+    frames = sorted((capture / "frames").glob("*.png"))
+    rgb = cv2.cvtColor(cv2.imread(str(frames[len(frames) // 2])), cv2.COLOR_BGR2RGB)
+    model = build_room(points, bbox, colors=rgb, face=face, scale=(room["scale"], room["scale_source"]))
+
+    img, meta = render_map(model)
+    cv2.imwrite(str(MAP_FILE), img)
+    model.points.astype(np.float32).tofile(CLOUD_XYZ)
+    model.colors.astype(np.uint8).tofile(CLOUD_RGB)
+    log(f"room scan: {len(model.points):,} points")
+    if model.has_floor:
+        log(f"floor: camera {model.camera_height_m:.2f} m up, pitch {model.pitch_deg:+.1f}, "
+            f"roll {model.roll_deg:+.1f}; your face {model.face_height_m:.2f} m above the floor")
+    else:
+        log("floor: not visible in the room scan either - level camera assumed")
+
+    previous = dict(room)
+    room.update({
+        "camera_xy": [float(v) for v in model.camera_xy],
+        "center_distance_m": model.center_distance_m,
+        "camera_height_m": model.camera_height_m,
+        "camera_pitch_deg": model.pitch_deg,
+        "camera_roll_deg": model.roll_deg,
+        "face_height_m": model.face_height_m,
+        "floor_z": model.floor_z,
+        "map": {"image": MAP_FILE.name, **meta},
+        "room_scan": {"capture": str(capture), "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                      "depth_ratio": ratio, "agreement": agree},
+    })
+    room["speakers"] = _speakers(room, previous)
+    ROOM_FILE.write_text(json.dumps(room, indent=2))
+    return room
 
 
 def default_speakers(room: dict | None, cfg_speakers: list[dict]) -> list[dict]:

@@ -13,6 +13,10 @@ One-time flow (redo when the room or the camera changes):
              (replaces the IPD assumption and the k key in m2_2_spatial_check).
 4. scan      colored 3D point cloud in the room frame -> config/room_cloud_{xyz,rgb}.bin,
              plus a top-down map for the 2.2 tool -> config/room_map.png
+4b. room scan (optional, --room-scan) the empty room from the same camera, nobody in
+             view: aligned to the calibration capture's depth, it replaces the scan,
+             floor and map (no listener hiding the floor); the calibration is kept.
+             A later calibration re-applies it while the camera has not moved.
 5. place     3D viewer in the browser: orbit the scan and place each speaker
              (drag its arrows, Shift+click a surface, or type x/y/z) -> config/room.json
 
@@ -24,6 +28,8 @@ scripted runs and reusing captures.
     python tools/room_setup.py --place                          # only edit speakers
     python tools/room_setup.py --seat-distance 1.6              # tape: lens -> face (m)
     python tools/room_setup.py --camera-height 1.05             # tape: lens -> floor (m)
+    python tools/room_setup.py --room-scan                      # after the setup: empty room
+    python tools/room_setup.py --room-scan --capture assets/captures/roomscan1
 """
 
 from __future__ import annotations
@@ -48,6 +54,8 @@ def main() -> int:
     ap.add_argument("--place", action="store_true", help="only edit speaker placement (opens the app)")
     ap.add_argument("--seat-distance", type=float, help="tape: camera lens -> your face (m), fixes scale")
     ap.add_argument("--camera-height", type=float, help="tape: camera lens -> floor (m), fixes scale")
+    ap.add_argument("--room-scan", action="store_true",
+                    help="capture (or --capture) the empty room and add it to the existing setup")
     ap.add_argument("--port", type=int, default=8765, help="local port for the 3D viewer")
     args = ap.parse_args()
 
@@ -57,12 +65,18 @@ def main() -> int:
         if capture is None:
             from vision.capture import capture_frames
 
-            capture = room_setup.CAPTURES / (args.name or "setup-" + time.strftime("%Y%m%d-%H%M%S"))
+            prefix = "roomscan-" if args.room_scan else "setup-"
+            capture = room_setup.CAPTURES / (args.name or prefix + time.strftime("%Y%m%d-%H%M%S"))
             index = args.camera if args.camera is not None else cfg["vision"]["camera_index"]
-            if not capture_frames(capture / "frames", index, title="room setup - capture"):
+            title = "room scan - step out of view after space" if args.room_scan else "room setup - capture"
+            countdown = {"countdown_s": 10.0, "prompt": "Step out of the camera view"} if args.room_scan else {}
+            if not capture_frames(capture / "frames", index, title=title, **countdown):
                 return 1
         try:
-            room_setup.build(capture, cfg["vision"], args.seat_distance, args.camera_height)
+            if args.room_scan:
+                room_setup.apply_room_scan(capture, cfg["vision"])
+            else:
+                room_setup.build(capture, cfg["vision"], args.seat_distance, args.camera_height)
         except room_setup.SetupError as e:
             raise SystemExit(str(e))
         print(f"saved {ROOM_FILE.relative_to(ROOT)} and the 3D scan")

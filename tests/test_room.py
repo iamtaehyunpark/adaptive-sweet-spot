@@ -137,3 +137,29 @@ def test_render_map_with_no_points_near_the_seat():
                      pitch_deg=None, roll_deg=None, scale=1.0, scale_source="model")
     img, meta = render_map(room)
     assert img.size > 0
+
+
+def test_room_scan_aligns_to_the_calibration_and_frees_the_floor():
+    from vision.room import SCAN_MIN_AGREE, align_scan, body_mask, build_room, face_point, points_from_depth
+
+    w, h, f = 320, 240, 250.0
+    empty = synthetic_room(1.2, -15.0, w, h, f)
+    cal, box = room_with_face(1.2, -15.0, face_cam=(0.0, 0.0, 2.0), w=w, h=h)
+    cal[int(box[1]):, int(box[0]):int(box[0] + box[2])] = (0.0, 0.0, 2.0)  # body down to the image bottom
+    scan_depth = empty[..., 2] / 1.25  # another depth run: off in scale
+    ratio, agree = align_scan(cal[..., 2], scan_depth, body_mask((h, w), box))
+    assert ratio == pytest.approx(1.25, rel=1e-6)
+    assert agree > 0.99
+    pts = points_from_depth(scan_depth * ratio, f, f)
+    face = face_point(cal, box)
+    scanned = build_room(pts, box, stride=1, face=face, scale=(1.0, "model"))
+    reference = build_room(cal, box, stride=1)
+    assert scanned.center_distance_m == pytest.approx(reference.center_distance_m, rel=0.01)
+    assert scanned.camera_height_m == pytest.approx(1.2, rel=0.01)
+    # the scan sees the floor where the body was
+    assert len(scanned.points) > len(reference.points)
+
+    # a moved camera does not match
+    moved = synthetic_room(1.0, -25.0, w, h, f)[..., 2]
+    _, agree = align_scan(cal[..., 2], moved, body_mask((h, w), box))
+    assert agree < SCAN_MIN_AGREE

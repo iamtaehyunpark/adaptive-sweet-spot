@@ -320,7 +320,13 @@
     <div class="muted">Initializes everything from one capture: sit at your seat facing the camera
       (on the FC speaker), ideally with some floor in view. A 5 s countdown, a 2 s 1080p capture,
       then the depth model builds the 3D scan and the calibration. Tracking keeps running.</div>
-    <div class="row"><button id="runSetup" class="primary">Run setup</button><span id="setupPill" class="pill idle">idle</span></div>
+    <div class="muted" style="margin-top:6px"><b>Room scan</b> (optional, after the setup): a 10 s countdown to
+      step out of the camera view, then the empty room is captured. It replaces the 3D scan, floor and map -
+      nobody hides the floor or what is behind the seat - and keeps the calibration. Don't move the camera
+      in between.</div>
+    <div class="row"><button id="runSetup" class="primary">Run setup</button>
+      <button id="runRoomScan" title="capture the empty room for a better 3D map (after the setup)">Room scan</button>
+      <span id="setupPill" class="pill idle">idle</span></div>
     <div id="setupMsg"></div>
     <div class="kv" id="roomInfo"></div>
     <div id="setupLog" hidden></div>

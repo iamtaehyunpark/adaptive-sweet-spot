@@ -4,7 +4,8 @@
                publishes every detection on the UDP bridge (interface/bridge.py),
                keeps an annotated JPEG for the page, and runs the room setup
                (countdown -> 1080p capture -> depth -> calibration/scan) on request
-               while tracking continues.
+               while tracking continues; afterwards an optional room scan (the empty
+               room, nobody in view) replaces the scan for a better 3D map.
 * serve        local web server (127.0.0.1) for interface/web/app.{html,js}:
                room data, live events (SSE), camera preview (MJPEG), speaker saving,
                and the Sound tab: it relays commands to the DSP process (tools/dsp.py,
@@ -34,6 +35,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 CAMERA_FILE = CONFIG_DIR / "camera.json"  # chosen camera + mode + controls (per machine)
 ROOT = room_setup.ROOT
 SETUP_COUNTDOWN_S = 5.0
+ROOM_SCAN_COUNTDOWN_S = 10.0  # time to walk out of the camera view
 SETUP_WARMUP_S = 1.5   # after switching to the setup resolution, let exposure settle
 SETUP_CAPTURE_S = 2.0
 SETUP_CALIB_S = 2.0    # live detections in the last seconds of the countdown calibrate the face width
@@ -84,6 +86,7 @@ class LiveTracker(threading.Thread):
         self.room_version = 0
         self.setup_state = {"stage": "idle", "message": "", "log": []}
         self._setup_requested = False
+        self._setup_kind = "calibration"  # or "room" (room scan)
         self._last = None  # last listener offset
         self._state = {"tracking": False}
         self.running = True
@@ -96,14 +99,23 @@ class LiveTracker(threading.Thread):
                     "bridge": {"host": self.bridge_addr[0], "port": self.bridge_addr[1],
                                "sent": self.publisher.sent if self.publisher else None}}
 
-    def request_setup(self) -> bool:
+    def request_setup(self, kind: str = "calibration") -> tuple[bool, str]:
+        """Start the calibration capture or (after it) the room scan."""
+        if kind == "room" and room_setup.load_room() is None:
+            return False, "run the setup (calibration) first - the room scan adds on to it"
         with self.lock:
             if self.setup_state["stage"] in ("idle", "done", "error"):
                 self._setup_requested = True
-                self.setup_state = {"stage": "countdown", "message": "Sit at your seat and face the camera",
-                                    "log": []}
-                return True
-        return False
+                self._setup_kind = kind
+                self.setup_state = {"stage": "countdown", "kind": kind, "log": [],
+                                    "message": self._countdown_message(kind, None)}
+                return True, ""
+        return False, "setup already running"
+
+    @staticmethod
+    def _countdown_message(kind: str, left: float | None) -> str:
+        msg = "Step out of the camera view" if kind == "room" else "Sit at your seat and face the camera"
+        return msg if left is None else f"{msg}... {left:.0f}"
 
     def stop(self) -> None:
         self.running = False
@@ -276,22 +288,27 @@ class LiveTracker(threading.Thread):
             self.camera_message = f"{len(entries)} camera(s) found"
         self.camera_busy = ""
 
-    def _run_build(self, capture: Path, live_faces: list) -> None:
+    def _run_build(self, capture: Path, live_faces: list, kind: str = "calibration") -> None:
         try:
-            self._set_setup(stage="processing", message="Running the depth model and building the scan...")
-            room_setup.build(capture, self.vcfg, log=self._log, live_faces=live_faces,
-                             tracking_size=self.actual_size)
-            # remember which camera view the setup used (the scan/calibration only fit that view)
-            room = room_setup.load_room()
-            w, h = self.actual_size
-            room["camera"] = {"index": self.cam_settings["index"], "size": [w, h], "aspect": w / h,
-                              "controls": self.cam_settings.get("controls", {})}
-            ROOM_FILE.write_text(json.dumps(room, indent=2))
-            self.mapper = None  # reload the new calibration on the next frame
+            if kind == "room":
+                self._set_setup(stage="processing", message="Running the depth model on the room scan...")
+                room_setup.apply_room_scan(capture, self.vcfg, log=self._log, tracking_size=self.actual_size)
+            else:
+                self._set_setup(stage="processing", message="Running the depth model and building the scan...")
+                room_setup.build(capture, self.vcfg, log=self._log, live_faces=live_faces,
+                                 tracking_size=self.actual_size)
+                # remember which camera view the setup used (the scan/calibration only fit that view)
+                room = room_setup.load_room()
+                w, h = self.actual_size
+                room["camera"] = {"index": self.cam_settings["index"], "size": [w, h], "aspect": w / h,
+                                  "controls": self.cam_settings.get("controls", {})}
+                ROOM_FILE.write_text(json.dumps(room, indent=2))
+            self.mapper = None  # reload the new calibration / room on the next frame
             self.pipe.reset()
             with self.lock:
                 self.room_version += 1
-            self._set_setup(stage="done", message="Setup complete")
+            self._set_setup(stage="done", message="Room scan complete - better 3D map" if kind == "room"
+                            else "Setup complete - run a room scan for a better 3D map (optional)")
         except Exception as e:  # report any failure to the page
             self._log(f"error: {e}")
             self._set_setup(stage="error", message=str(e).splitlines()[0][:200])
@@ -309,6 +326,7 @@ class LiveTracker(threading.Thread):
         last_preview = 0.0
         countdown_until = capture_from = capture_until = None
         capture_dir = None
+        kind = "calibration"
         saved = 0
         calib_faces: list = []
 
@@ -331,24 +349,28 @@ class LiveTracker(threading.Thread):
             # ---- setup capture state machine (tracking continues outside the capture window)
             if self._setup_requested:
                 self._setup_requested = False
-                countdown_until = ts + SETUP_COUNTDOWN_S
+                kind = self._setup_kind
+                countdown_until = ts + (ROOM_SCAN_COUNTDOWN_S if kind == "room" else SETUP_COUNTDOWN_S)
                 calib_faces = []
             if countdown_until is not None:
                 left = countdown_until - ts
                 if left > 0:
-                    self._set_setup(message=f"Sit at your seat and face the camera... {left:.0f}", remaining=left)
+                    self._set_setup(message=self._countdown_message(kind, left), remaining=left)
                 else:
                     countdown_until = None
                     modes = [tuple(m) for m in self.capabilities["modes"]] if self.capabilities else None
                     size = setup_mode(modes, self.actual_size)
                     self.cam.close()
                     self.cam = self._open({**self.cam_settings, "width": size[0], "height": size[1], "fps": 30})
-                    capture_dir = room_setup.CAPTURES / ("setup-" + time.strftime("%Y%m%d-%H%M%S"))
+                    prefix = "roomscan-" if kind == "room" else "setup-"
+                    capture_dir = room_setup.CAPTURES / (prefix + time.strftime("%Y%m%d-%H%M%S"))
                     (capture_dir / "frames").mkdir(parents=True, exist_ok=True)
                     capture_from = time.perf_counter() + SETUP_WARMUP_S
                     capture_until = capture_from + SETUP_CAPTURE_S
                     saved = 0
-                    self._set_setup(stage="capturing", message="Hold still - capturing", remaining=0)
+                    self._set_setup(stage="capturing", remaining=0,
+                                    message="Capturing the empty room - stay out of view" if kind == "room"
+                                    else "Hold still - capturing")
                     continue
             if capture_until is not None:
                 if ts >= capture_from:
@@ -362,7 +384,7 @@ class LiveTracker(threading.Thread):
                     self.mapper = None
                     self.pipe.reset()
                     self._log(f"captured {saved} frames at {shot[0]}x{shot[1]} -> {capture_dir}")
-                    threading.Thread(target=self._run_build, args=(capture_dir, calib_faces), daemon=True).start()
+                    threading.Thread(target=self._run_build, args=(capture_dir, calib_faces, kind), daemon=True).start()
                 if time.perf_counter() - last_preview > 1 / PREVIEW_FPS:
                     last_preview = time.perf_counter()
                     self._publish_preview(frame, None)
@@ -372,7 +394,7 @@ class LiveTracker(threading.Thread):
             h, w = frame.shape[:2]
             mapper = self._mapper_for(w, h)
             face, processed = self.pipe.process(frame, ts)
-            if processed and face is not None and countdown_until is not None \
+            if processed and face is not None and countdown_until is not None and kind == "calibration" \
                     and countdown_until - ts < SETUP_CALIB_S and self.pipe.tracker.mode == "track":
                 calib_faces.append(face)
             if processed:
@@ -601,8 +623,12 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                     else:
                         self._send(json.dumps(reply).encode(), "application/json", 200 if reply.get("ok") else 400)
                 elif path == "/api/setup":
-                    ok = tracker is not None and tracker.request_setup()
-                    self._send(json.dumps({"ok": ok}).encode(), "application/json", 200 if ok else 409)
+                    kind = data.get("kind", "calibration")
+                    if kind not in ("calibration", "room"):
+                        raise ValueError(f"unknown setup kind {kind!r}")
+                    ok, err = tracker.request_setup(kind) if tracker is not None else (False, "no camera")
+                    self._send(json.dumps({"ok": ok, "error": err}).encode(), "application/json",
+                               200 if ok else 409)
                 else:
                     self._send(b"not found", "text/plain", 404)
             except (ValueError, KeyError, TypeError) as e:

@@ -189,17 +189,24 @@ def face_point(points: np.ndarray, bbox: np.ndarray) -> np.ndarray:
 
 def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float | None = None,
                camera_height_m: float | None = None, stride: int = 2,
-               colors: np.ndarray | None = None) -> RoomModel:
+               colors: np.ndarray | None = None, face: np.ndarray | None = None,
+               scale: tuple[float, str] | None = None) -> RoomModel:
     """Room model from a camera-frame metric point map and the listener's face box.
 
     Optional tape measurements fix the model's scale: ``seat_distance_m`` (camera
     lens -> face, straight line) or ``camera_height_m`` (lens -> floor). ``colors``
     is the (H, W, 3) RGB image the points came from. Flying pixels and points
     beyond MAX_RANGE_M are removed.
+
+    Room scan (empty room, see align_scan): pass the calibration's camera-frame
+    ``face`` point and its ``scale`` (factor, source); ``points`` then hold no
+    listener, so no body is masked out of the floor search.
     """
-    face = face_point(points, face_bbox)
-    floor = fit_floor(points, exclude=body_mask(points.shape[:2], face_bbox), above=face)
-    scale, source = 1.0, "model"
+    empty_room = face is not None
+    if face is None:
+        face = face_point(points, face_bbox)
+    floor = fit_floor(points, exclude=None if empty_room else body_mask(points.shape[:2], face_bbox), above=face)
+    scale, source = scale or (1.0, "model")
     if seat_distance_m:
         scale, source = seat_distance_m / float(np.linalg.norm(face)), "seat distance tape"
     elif camera_height_m and floor is not None:
@@ -236,6 +243,46 @@ def build_room(points: np.ndarray, face_bbox: np.ndarray, seat_distance_m: float
         face_height_m=face_height, camera_height_m=cam_height, pitch_deg=pitch, roll_deg=roll,
         scale=scale, scale_source=source, colors=cols, floor_z=floor_z,
     )
+
+
+# ---------------------------------------------------------------------------
+# Room scan: a second capture of the empty room from the same (fixed) camera.
+# The calibration capture has the listener in it, hiding the floor and whatever
+# is behind them; the room scan sees all of it. Its depth is brought to the
+# calibration's scale and intrinsics so it lands in the same room frame.
+# ---------------------------------------------------------------------------
+
+SCAN_AGREE_REL = 0.05     # static pixels within this (relative) of the calibration depth agree
+SCAN_MIN_AGREE = 0.5      # below this fraction of agreeing pixels the camera moved
+
+
+def points_from_depth(depth: np.ndarray, fx: float, fy: float) -> np.ndarray:
+    """(H, W, 3) camera-frame points from z-depth, principal point at the image center."""
+    h, w = depth.shape
+    u, v = np.meshgrid(np.arange(w) + 0.5, np.arange(h) + 0.5)
+    return np.stack([(u - w / 2) * depth / fx, (v - h / 2) * depth / fy, depth], axis=-1)
+
+
+def align_scan(ref_depth: np.ndarray, scan_depth: np.ndarray, exclude: np.ndarray | None = None
+               ) -> tuple[float, float]:
+    """Depth ratio that brings the room scan to the calibration capture, and agreement.
+
+    Both are z-depth maps from the same camera pose. ``exclude`` masks the listener in
+    the calibration capture (it is not in the scan). Returns (ratio, fraction of the
+    compared pixels within SCAN_AGREE_REL after scaling); a low fraction means the
+    camera (or its view) moved between the captures.
+    """
+    if ref_depth.shape != scan_depth.shape:
+        raise ValueError(f"capture sizes differ: {ref_depth.shape[::-1]} vs {scan_depth.shape[::-1]}")
+    ok = np.isfinite(ref_depth) & np.isfinite(scan_depth) & (ref_depth > 0) & (scan_depth > 0)
+    if exclude is not None:
+        ok &= ~exclude
+    if ok.sum() < 100:
+        raise ValueError("no depth to compare between the captures")
+    ratio = ref_depth[ok] / scan_depth[ok]
+    k = float(np.median(ratio))
+    agree = float((np.abs(ratio / k - 1) < SCAN_AGREE_REL).mean())
+    return k, agree
 
 
 def render_map(room: RoomModel, m_per_px: float = 0.02, half_extent_m: float = 5.0):

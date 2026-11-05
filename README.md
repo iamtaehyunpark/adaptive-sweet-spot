@@ -75,7 +75,8 @@ One page with everything:
   your seat facing the camera), 2 s 1080p capture, MoGe-2 depth, calibration and the 3D
   scan; the page reloads the room when done. Tracking keeps running, and the tracking
   frames from the end of the countdown calibrate your face width exactly as tracking
-  measures it.
+  measures it. **Room scan** (optional, afterwards): 10 s countdown to step out of view,
+  then the empty room is captured and replaces the 3D scan / floor / map (see 3.2b).
 - **Sound** — the sweet-spot DSP: steering Bypass / Static / Follow, listener from tracking or
   manual (drag in the top view), test signals / files / live input, output to the 5.1 DAC or
   **virtual surround** over stereo, per-channel delay / level / treble / meters, latency
@@ -390,6 +391,15 @@ One-time flow (redo when the room or camera changes), `tools/room_setup.py`:
    assumption and the `k` key of the 2.2 tool (`k` still re-centers).
 4. **Scan**: colored 3D point cloud in the room frame → `config/room_cloud_{xyz,rgb}.bin`,
    plus a top-down map for the 2.2 tool → `config/room_map.png`.
+4b. **Room scan** (optional, `--room-scan`, or *Room scan* in the app's Setup tab): a
+   second capture of the **empty room** from the same, unmoved camera. The calibration
+   needs your face, but your body hides the floor and everything behind the seat; the
+   room scan sees it all. Its depth is scaled to the calibration capture (median ratio
+   over pixels outside your body; < 50 % agreement = the camera moved → error) and
+   re-projected with the calibration's intrinsics, so it lands in the same room frame
+   at the same scale. It replaces the cloud, floor fit and map; the calibration (face
+   width, seat distance, FOV) is unchanged. Re-running the calibration re-applies the
+   last room scan as long as it still matches. Stored as `room_scan` in `room.json`.
 5. **Place speakers** in a 3D viewer in the browser (`interface/room_viewer.py`,
    `interface/web/`) → `config/room.json`. FC is the camera; the others start at
    ITU-style defaults.
@@ -400,6 +410,7 @@ python tools/room_setup.py --capture assets/captures/room2  # reuse a capture
 python tools/room_setup.py --place                          # edit speakers only
 python tools/room_setup.py --seat-distance 1.6              # optional tape: lens → face (m)
 python tools/room_setup.py --camera-height 1.05             # optional tape: lens → floor (m)
+python tools/room_setup.py --room-scan                      # after the setup: empty-room scan
 ```
 
 The live app (`tools/app.py`) runs the same setup from its Setup tab. 3D viewer (opens at
