@@ -328,6 +328,7 @@ function updateSetup(st, version) {
   const idle = ['idle', 'done', 'error'].includes(st.stage);
   $('runSetup').disabled = !idle;
   $('runRoomScan').disabled = !idle || !room?.ready;
+  $('clearSetup').disabled = !idle;
   const log = $('setupLog');
   log.hidden = !(st.log && st.log.length);
   log.textContent = (st.log ?? []).join('\n');
@@ -358,6 +359,14 @@ async function startSetup(kind) {
 }
 $('runSetup').addEventListener('click', () => startSetup('calibration'));
 $('runRoomScan').addEventListener('click', () => startSetup('room'));
+$('clearSetup').addEventListener('click', async () => {
+  if (!confirm('Clear the whole setup? The calibration, 3D scan, room scan and speaker placement are removed '
+    + '(camera and audio choices are kept). Run setup again afterwards.')) return;
+  const r = await fetch('/api/setup/clear', { method: 'POST' });
+  const res = await r.json().catch(() => ({}));
+  if (!r.ok) { $('setupMsg').textContent = res.error || 'could not clear the setup'; return; }
+  await loadRoom();
+});
 
 // ---------------------------------------------------------------- top view (2D)
 const topCanvas = $('top');

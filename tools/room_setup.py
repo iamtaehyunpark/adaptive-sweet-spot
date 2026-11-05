@@ -29,6 +29,7 @@ scripted runs and reusing captures.
     python tools/room_setup.py --seat-distance 1.6              # tape: lens -> face (m)
     python tools/room_setup.py --camera-height 1.05             # tape: lens -> floor (m)
     python tools/room_setup.py --room-scan                      # after the setup: empty room
+    python tools/room_setup.py --clear                          # remove the whole setup
     python tools/room_setup.py --room-scan --capture assets/captures/roomscan1
 """
 
@@ -56,8 +57,17 @@ def main() -> int:
     ap.add_argument("--camera-height", type=float, help="tape: camera lens -> floor (m), fixes scale")
     ap.add_argument("--room-scan", action="store_true",
                     help="capture (or --capture) the empty room and add it to the existing setup")
+    ap.add_argument("--clear", action="store_true",
+                    help="remove the whole setup (calibration, scans, room scan, speaker placement)")
     ap.add_argument("--port", type=int, default=8765, help="local port for the 3D viewer")
     args = ap.parse_args()
+
+    if args.clear:
+        removed = room_setup.clear_setup()
+        for p in removed:
+            print(f"removed {p.relative_to(ROOT)}")
+        print("setup cleared" if removed else "nothing to clear")
+        return 0
 
     cfg = load_config(room=False)
     if not args.place:

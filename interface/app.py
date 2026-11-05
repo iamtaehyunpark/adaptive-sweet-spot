@@ -112,6 +112,19 @@ class LiveTracker(threading.Thread):
                 return True, ""
         return False, "setup already running"
 
+    def clear_setup(self) -> tuple[bool, str]:
+        """Remove the room setup; tracking falls back to the uncalibrated defaults."""
+        with self.lock:
+            if self.setup_state["stage"] not in ("idle", "done", "error"):
+                return False, "setup is running - wait for it to finish"
+            removed = room_setup.clear_setup()
+            self.mapper = None
+            self.room_version += 1
+            self.setup_state = {"stage": "idle", "message": "Setup cleared" if removed else "Nothing to clear",
+                                "log": [f"removed {p.relative_to(ROOT)}" for p in removed]}
+        self.pipe.reset()
+        return True, ""
+
     @staticmethod
     def _countdown_message(kind: str, left: float | None) -> str:
         msg = "Step out of the camera view" if kind == "room" else "Sit at your seat and face the camera"
@@ -622,6 +635,20 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                         self._send(b'{"ok": false, "error": "DSP not running"}', "application/json", 503)
                     else:
                         self._send(json.dumps(reply).encode(), "application/json", 200 if reply.get("ok") else 400)
+                elif path == "/api/setup/clear":
+                    if tracker is not None:
+                        ok, err = tracker.clear_setup()
+                    else:
+                        room_setup.clear_setup()
+                        ok, err = True, ""
+                    if ok:
+                        from config import load_config
+
+                        cfg["speakers"][:] = load_config()["speakers"]  # drop the placed positions
+                        if dsp is not None:
+                            dsp.command("reload")
+                    self._send(json.dumps({"ok": ok, "error": err}).encode(), "application/json",
+                               200 if ok else 409)
                 elif path == "/api/setup":
                     kind = data.get("kind", "calibration")
                     if kind not in ("calibration", "room"):

@@ -77,6 +77,8 @@ One page with everything:
   frames from the end of the countdown calibrate your face width exactly as tracking
   measures it. **Room scan** (optional, afterwards): 10 s countdown to step out of view,
   then the empty room is captured and replaces the 3D scan / floor / map (see 3.2b).
+  **Clear setup** removes the calibration, scans, room scan and speaker placement
+  (camera/audio choices and raw captures are kept) - start over with *Run setup*.
 - **Sound** — the sweet-spot DSP: steering Bypass / Static / Follow, listener from tracking or
   manual (drag in the top view), test signals / files / live input, output to the 5.1 DAC or
   **virtual surround** over stereo, per-channel delay / level / treble / meters, latency
@@ -411,6 +413,7 @@ python tools/room_setup.py --place                          # edit speakers only
 python tools/room_setup.py --seat-distance 1.6              # optional tape: lens → face (m)
 python tools/room_setup.py --camera-height 1.05             # optional tape: lens → floor (m)
 python tools/room_setup.py --room-scan                      # after the setup: empty-room scan
+python tools/room_setup.py --clear                          # remove the whole setup
 ```
 
 The live app (`tools/app.py`) runs the same setup from its Setup tab. 3D viewer (opens at

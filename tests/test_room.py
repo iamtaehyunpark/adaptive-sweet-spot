@@ -163,3 +163,16 @@ def test_room_scan_aligns_to_the_calibration_and_frees_the_floor():
     moved = synthetic_room(1.0, -25.0, w, h, f)[..., 2]
     _, agree = align_scan(cal[..., 2], moved, body_mask((h, w), box))
     assert agree < SCAN_MIN_AGREE
+
+
+def test_clear_setup_removes_only_setup_files(tmp_path, monkeypatch):
+    from interface import setup as room_setup
+
+    files = [tmp_path / n for n in ("room.json", "calibration.json", "room_cloud_xyz.bin")]
+    keep = tmp_path / "camera.json"
+    for p in files + [keep]:
+        p.write_text("{}")
+    monkeypatch.setattr(room_setup, "SETUP_FILES", tuple(files) + (tmp_path / "room_map.png",))
+    assert room_setup.clear_setup() == files
+    assert not any(p.exists() for p in files) and keep.exists()
+    assert room_setup.clear_setup() == []

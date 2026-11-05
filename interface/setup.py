@@ -34,8 +34,23 @@ CAPTURES = ROOT / "assets" / "captures"
 MOGE_PYTHON = ROOT / ".venvs" / "moge2" / "bin" / "python"
 
 
+SETUP_FILES = (ROOM_FILE, CAL_FILE, CLOUD_XYZ, CLOUD_RGB, MAP_FILE)  # what "Clear setup" removes
+
+
 class SetupError(RuntimeError):
     pass
+
+
+def clear_setup() -> list[Path]:
+    """Remove the whole room setup: calibration, scan, room scan, map, speaker placement.
+
+    Camera (camera.json) and audio (audio.json) choices and the raw captures stay.
+    Returns the files removed.
+    """
+    removed = [p for p in SETUP_FILES if p.exists()]
+    for p in removed:
+        p.unlink()
+    return removed
 
 
 def run_depth(capture: Path, log: Callable[[str], None] = print) -> Path:
