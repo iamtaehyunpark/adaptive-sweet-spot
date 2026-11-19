@@ -56,6 +56,16 @@ pytest
 python tools/fetch_model.py        # BlazeFace weights -> assets/models/
 ```
 
+### Windows
+
+Use `run_windows.bat` (double-click, Command Prompt, or PowerShell — wraps `run_windows.ps1` with execution-policy bypass). It sets up `.venv`, fetches BlazeFace weights if missing, and launches `tools/app.py` with any flags forwarded:
+
+```powershell
+.\run_windows.bat                                # launch app + DSP
+.\run_windows.bat --camera 0 --audio-device WASAPI
+.\run_windows.bat -SetupDepth                    # one-time MoGe-2 setup for Room Setup / 3D scan
+```
+
 ## Sweet Spot Live (the integrated app)
 
 ```bash

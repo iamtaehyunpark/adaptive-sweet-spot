@@ -27,6 +27,21 @@ sys.path.insert(0, str(ROOT))
 from config import load_config  # noqa: E402
 
 
+def _parent_alive(pid: int) -> bool:
+    if sys.platform != "win32":
+        return os.getppid() == pid
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == 0x00000102  # WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--list-devices", action="store_true")
@@ -86,7 +101,7 @@ def main() -> int:
     try:
         while True:
             time.sleep(0.5)
-            if args.parent and os.getppid() != args.parent:
+            if args.parent and not _parent_alive(args.parent):
                 break  # the app is gone
             if args.quiet:
                 continue

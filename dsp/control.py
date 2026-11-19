@@ -59,7 +59,9 @@ class ControlServer:
             except (TimeoutError, socket.timeout):
                 continue
             except OSError:
-                break
+                if not self._running:
+                    break
+                continue
             req_id = None
             try:
                 req = json.loads(data)

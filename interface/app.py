@@ -579,7 +579,7 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                     self.wfile.write(f"data: {json.dumps(state)}\n\n".encode())
                     self.wfile.flush()
                     time.sleep(1 / EVENTS_HZ)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
         def _video(self):
@@ -601,7 +601,7 @@ def serve(cfg: dict, tracker: LiveTracker | None, port: int = 8765, open_browser
                     self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                                      + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
                     self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
         def do_POST(self):

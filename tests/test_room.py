@@ -176,3 +176,46 @@ def test_clear_setup_removes_only_setup_files(tmp_path, monkeypatch):
     assert room_setup.clear_setup() == files
     assert not any(p.exists() for p in files) and keep.exists()
     assert room_setup.clear_setup() == []
+
+
+def test_apply_room_scan_does_not_gate_on_face_detection(tmp_path, monkeypatch):
+    import json
+
+    import cv2
+
+    from interface import setup as room_setup
+
+    w, h, f = 160, 120, 125.0
+    cal_pts, box = room_with_face(1.2, -15.0, face_cam=(0.0, 0.0, 2.0), w=w, h=h)
+    scan_pts = synthetic_room(1.2, -15.0, w, h, f)
+
+    cal_dir = tmp_path / "cal"
+    scan_dir = tmp_path / "scan"
+    (cal_dir / "frames").mkdir(parents=True)
+    (scan_dir / "frames").mkdir(parents=True)
+    np.savez(cal_dir / "moge2.npz", points=cal_pts, depth=cal_pts[..., 2], fx=f, fy=f)
+    np.savez(scan_dir / "moge2.npz", points=scan_pts, depth=scan_pts[..., 2], fx=f, fy=f)
+    cv2.imwrite(str(scan_dir / "frames" / "000.png"), np.zeros((h, w, 3), dtype=np.uint8))
+
+    room_file = tmp_path / "room.json"
+    room_file.write_text(json.dumps({
+        "capture": str(cal_dir),
+        "face_bbox_px": box.tolist(),
+        "scale": 1.0,
+        "scale_source": "model",
+        "speakers": [],
+    }))
+
+    monkeypatch.setattr(room_setup, "ROOM_FILE", room_file)
+    monkeypatch.setattr(room_setup, "MAP_FILE", tmp_path / "room_map.png")
+    monkeypatch.setattr(room_setup, "CLOUD_XYZ", tmp_path / "room_cloud_xyz.bin")
+    monkeypatch.setattr(room_setup, "CLOUD_RGB", tmp_path / "room_cloud_rgb.bin")
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("detect_face should not be called during room scan")
+
+    monkeypatch.setattr(room_setup, "detect_face", fail_if_called)
+
+    updated = room_setup.apply_room_scan(scan_dir, {}, log=lambda _: None)
+    assert updated["room_scan"]["capture"] == str(scan_dir)
+    assert updated["room_scan"]["agreement"] > 0.99

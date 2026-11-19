@@ -937,8 +937,11 @@ $('outSel').addEventListener('change', async (e) => {
 $('inSel').addEventListener('change', (e) => dsp({ input_device: e.target.value }));
 async function loadDevices(refresh = false) {
   const { devices } = await fetch(`/api/dsp/devices${refresh ? '?refresh=1' : ''}`).then((r) => r.json());
+  const multiApi = new Set(devices.map((d) => d.hostapi)).size > 1;
+  const val = (d) => (multiApi ? `${d.name} (${d.hostapi})` : d.name);
+  const lbl = (d, key, tag) => `${d.name}${multiApi ? ` [${d.hostapi}]` : ''} &middot; ${d[key]} ch${tag(d[key])}`;
   const opts = (key, tag) => '<option value="">system default</option>' + devices.filter((d) => d[key] > 0)
-    .map((d) => `<option value="${d.name.replace(/"/g, '&quot;')}">${d.name} &middot; ${d[key]} ch${tag(d[key])}</option>`).join('');
+    .map((d) => `<option value="${val(d).replace(/"/g, '&quot;')}">${lbl(d, key, tag)}</option>`).join('');
   $('outSel').innerHTML = opts('out', (n) => (n >= 6 ? ' (5.1)' : n >= 2 ? ' (stereo: virtual surround)' : ''));
   $('inSel').innerHTML = opts('in', () => '');
   $('outSel').value = dspState?.output ?? '';

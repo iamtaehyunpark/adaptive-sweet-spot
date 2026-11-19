@@ -58,18 +58,23 @@ def list_devices(refresh: bool = False) -> list[dict]:
 
 
 def find_device(name: str | int | None, kind: str) -> int | None:
-    """Device index by index or name substring (case-insensitive); None = system default."""
+    """Device index by index, 'name (hostapi)', or name substring; None = system default."""
     if name is None or name == "":
         return None
     if isinstance(name, int) or str(name).isdigit():
         return int(name)
     key = "out" if kind == "output" else "in"
     devices = [d for d in list_devices() if d[key] > 0]
-    for d in devices:  # exact name first, then substring
+    # On Windows, prefer WASAPI (low latency, full 5.1 channel count) over MME/DirectSound.
+    ordered = sorted(devices, key=lambda d: 0 if "WASAPI" in d["hostapi"].upper() else 1)
+    for d in ordered:  # exact "name (hostapi)" match first
+        if f"{d['name']} ({d['hostapi']})" == name:
+            return d["index"]
+    for d in ordered:  # exact name
         if d["name"] == name:
             return d["index"]
-    for d in devices:
-        if str(name).lower() in d["name"].lower():
+    for d in ordered:  # substring
+        if str(name).lower() in d["name"].lower() or str(name).lower() in f"{d['name']} ({d['hostapi']})".lower():
             return d["index"]
     raise ValueError(f"no {kind} device matching {name!r}")
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Callable
@@ -31,7 +32,7 @@ CLOUD_XYZ = CONFIG_DIR / "room_cloud_xyz.bin"  # float32 (N, 3) room frame
 CLOUD_RGB = CONFIG_DIR / "room_cloud_rgb.bin"  # uint8 (N, 3)
 CAL_FILE = CONFIG_DIR / "calibration.json"
 CAPTURES = ROOT / "assets" / "captures"
-MOGE_PYTHON = ROOT / ".venvs" / "moge2" / "bin" / "python"
+MOGE_PYTHON = ROOT / ".venvs" / "moge2" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
 SETUP_FILES = (ROOM_FILE, CAL_FILE, CLOUD_XYZ, CLOUD_RGB, MAP_FILE)  # what "Clear setup" removes
@@ -213,14 +214,9 @@ def apply_room_scan(capture: Path, vcfg: dict, log: Callable[[str], None] = prin
     if not (cal_capture / "moge2.npz").exists():
         raise SetupError(f"calibration capture {cal_capture} is missing - run Setup again")
 
-    # nobody may be in view (checked before the slow depth model)
-    try:
-        detect_face(capture, vcfg, tracking_size)
-    except SetupError as e:
-        if "no face" not in str(e):
-            raise
-    else:
-        raise SetupError("a face is in the room scan - step out of the camera view and retry")
+    frames = sorted((capture / "frames").glob("*.png"))
+    if not frames:
+        raise SetupError(f"no frames in {capture / 'frames'}")
 
     cal = np.load(cal_capture / "moge2.npz")
     scan = np.load(run_depth(capture, log))
@@ -239,7 +235,6 @@ def apply_room_scan(capture: Path, vcfg: dict, log: Callable[[str], None] = prin
 
     points = points_from_depth(scan["depth"] * ratio, float(cal["fx"]), float(cal["fy"]))
     face = face_point(cal["points"], bbox)
-    frames = sorted((capture / "frames").glob("*.png"))
     rgb = cv2.cvtColor(cv2.imread(str(frames[len(frames) // 2])), cv2.COLOR_BGR2RGB)
     model = build_room(points, bbox, colors=rgb, face=face, scale=(room["scale"], room["scale_source"]))
 
